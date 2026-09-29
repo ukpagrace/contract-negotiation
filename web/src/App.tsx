@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import './App.css'
 import { Button } from './components/ui/button'
 import { api, navigate, type User } from './lib/api'
-import { ContractList, ContractPage } from './pages/Contracts'
+import { ContractList } from './pages/Contracts'
+import { ContractPage } from './pages/contract/ContractPage'
 import { HomePage } from './pages/Homepage'
 import { Invite } from './pages/Invite'
 import { Login } from './pages/Login'
@@ -38,7 +39,7 @@ function App() {
   return (
     <>
       {user && (
-        <header className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 pt-6 text-sm sm:px-6">
+        <header className={`mx-auto flex w-full items-center justify-between text-sm ${contractId ? 'px-6 py-3' : 'max-w-3xl px-4 pt-6 sm:px-6'}`}>
           <button className="font-serif text-lg text-ink hover:text-action" onClick={() => navigate('/contracts')}>
             Contracts
           </button>
