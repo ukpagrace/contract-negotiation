@@ -1,5 +1,9 @@
 import type { OutboundEmail } from './mail.provider.js';
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+}
+
 function wrap(title: string, body: string): string {
   return [
     '<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.55;color:#111">',
@@ -39,8 +43,8 @@ export function inviteEmail(
     subject: `${inviterName} invited you to review ${contractTitle}`,
     text,
     html: wrap(
-      `${inviterName} invited you to review a contract`,
-      `<p style="margin:0 0 14px"><strong>${contractTitle}</strong></p>` +
+      `${escapeHtml(inviterName)} invited you to review a contract`,
+      `<p style="margin:0 0 14px"><strong>${escapeHtml(contractTitle)}</strong></p>` +
         `<p style="margin:0 0 14px"><a href="${link}">Open the contract</a></p>` +
         '<p style="margin:0;color:#555">You will be sent a short code to confirm your email address.</p>',
     ),

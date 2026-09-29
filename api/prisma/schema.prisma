@@ -60,6 +60,7 @@ model User {
   chatMessages      ChatMessage[]
   uploadedFiles     UploadedFile[]
   activity          ActivityLog[]
+  invitesSent       Invite[]
 }
 
 model Session {
@@ -145,12 +146,14 @@ model Invite {
   contractId String
   partyId    String
   email      String
+  invitedById String
   tokenHash  String    @unique
   expiresAt  DateTime
   acceptedAt DateTime?
 
   contract Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  party    ContractParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  party     ContractParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  invitedBy User          @relation(fields: [invitedById], references: [id])
 }
 
 model ContractVersion {

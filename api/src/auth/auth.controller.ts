@@ -7,7 +7,7 @@ import type { User } from '../generated/prisma/client.js';
 import { AuthService } from './auth.service.js';
 import { SESSION_COOKIE, SessionGuard, type AuthenticatedRequest } from './session.guard.js';
 
-function parseEmail(value: unknown): string {
+export function parseEmail(value: unknown): string {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
   if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new BadRequestException('Enter a valid email address.');

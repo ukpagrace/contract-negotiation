@@ -17,7 +17,7 @@ async function hashCode(code: string, salt: string): Promise<Buffer> {
 }
 
 // Session tokens are 32 random bytes; nothing to brute force, so a fast hash is enough.
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
