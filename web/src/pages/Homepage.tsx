@@ -1,56 +1,46 @@
 import React from 'react';
-import { ArrowRight, FileText, Shield, Users, Sparkles } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
 interface HomePageProps {
-//   onStart: () => void;
+  onStart: () => void;
 }
 
-export const HomePage: React.FC<HomePageProps> = () => {
+const steps = [
+  { title: 'Draft or upload', body: 'Start from a blank page or a Word document, then invite the other side and your team.' },
+  { title: 'Take turns', body: 'Each side marks up the contract and sends it back. Every change is tracked and must be accepted or rejected.' },
+  { title: 'Sign', body: 'When nothing is left to resolve, both sides sign and the final version is locked.' },
+];
+
+export const HomePage: React.FC<HomePageProps> = ({ onStart }) => {
   return (
-    <div className="max-w-4xl mx-auto text-center py-16 space-y-8">
-      <div className="inline-flex items-center space-x-2 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-4 py-1.5 rounded-full text-sm">
-        <Sparkles className="w-4 h-4" />
-        <span>Next-Gen Smart Contract Negotiation</span>
+    <main className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6 md:py-20">
+      <div className="sheet px-6 py-10 sm:px-12 sm:py-14">
+        <p className="font-serif text-2xl leading-snug text-ink sm:text-[2rem]">
+          4.2&ensp;Payment is due within <del className="hero-del">30</del> <ins className="hero-ins no-underline">45</ins>{' '}
+          days of the invoice date.
+        </p>
+        <p className="mt-4 text-sm text-ink-muted">Suggested by Beta Ltd. Waiting for you to accept or reject.</p>
       </div>
 
-      <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight text-white leading-tight">
-        Negotiate Contracts <br />
-        <span className="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-          Faster & Fairer.
-        </span>
+      <h1 className="mt-14 mb-0 font-serif text-4xl font-medium leading-tight tracking-tight text-ink sm:text-5xl">
+        Two sides, one document.
       </h1>
-
-      <p className="text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
-        Eliminate redline friction. Invite your legal team and counterparties into a collaborative, real-time negotiation environment.
+      <p className="mt-4 max-w-xl text-lg leading-relaxed text-ink-muted">
+        Negotiate a contract with the other party in one place, taking turns until every change is agreed.
       </p>
+      <Button size="lg" className="mt-8 h-11 px-6 text-base" onClick={onStart}>
+        Start a contract
+      </Button>
 
-      <div className="pt-4">
-        <button
-        //   onClick={onStart}
-          className="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-8 py-4 rounded-xl text-lg shadow-lg shadow-indigo-600/25 transition-all flex items-center space-x-3 mx-auto cursor-pointer"
-        >
-          <span>Start Negotiating</span>
-          <ArrowRight className="w-5 h-5" />
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-16 text-left">
-        <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl">
-          <FileText className="w-8 h-8 text-indigo-400 mb-4" />
-          <h3 className="text-white font-semibold mb-2">Smart Clauses</h3>
-          <p className="text-slate-400 text-sm">Automated risk analysis and suggested compromise language.</p>
-        </div>
-        <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl">
-          <Users className="w-8 h-8 text-purple-400 mb-4" />
-          <h3 className="text-white font-semibold mb-2">Team Roles</h3>
-          <p className="text-slate-400 text-sm">Invite internal counsel and reviewers with custom permissions.</p>
-        </div>
-        <div className="bg-slate-900/60 border border-slate-800 p-6 rounded-2xl">
-          <Shield className="w-8 h-8 text-pink-400 mb-4" />
-          <h3 className="text-white font-semibold mb-2">Audit History</h3>
-          <p className="text-slate-400 text-sm">Complete immutable trail of revisions and approvals.</p>
-        </div>
-      </div>
-    </div>
+      <ol className="mt-16 grid gap-8 border-t border-rule pt-10 sm:grid-cols-3">
+        {steps.map((step, index) => (
+          <li key={step.title}>
+            <span className="font-serif text-3xl text-action">{index + 1}</span>
+            <h3 className="mt-2 font-medium text-ink">{step.title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-ink-muted">{step.body}</p>
+          </li>
+        ))}
+      </ol>
+    </main>
   );
 };
