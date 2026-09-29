@@ -1,0 +1,48 @@
+span[data-tracked-insertion] {
+  /* background-color: rgba(34, 197, 94, 0.2); */
+  color: #15803d;
+  text-decoration: underline;
+}
+
+/* Deleted text: Red tint + Strikethrough */
+span[data-tracked-deletion] {
+  /* background-color: rgba(239, 68, 68, 0.2); */
+  color: #b91c1c;
+  text-decoration: line-through;
+} 
+
+/* ==========================================================================
+   1. COUNTERPARTY ONLY VIEW
+   Assuming current user is "Ukpa Uchechi".
+   Hides the current user's redlines while keeping counterparty redlines visible.
+   ========================================================================== */
+
+/* Hide current user's proposed deletions */
+.tiptap-view-counterparty span[data-tracked-deletion][data-author="Ukpa Uchechi"] {
+  display: none !important;
+}
+
+/* Render current user's proposed additions as plain, normal text */
+.tiptap-view-counterparty span[data-tracked-insertion][data-author="Ukpa Uchechi"] {
+  background-color: transparent !important;
+  color: inherit !important;
+  text-decoration: none !important;
+}
+
+
+/* ==========================================================================
+   2. FINAL CLEAN VIEW
+   Hides ALL redlines regardless of author.
+   ========================================================================== */
+
+/* Hide all proposed deletions completely */
+.tiptap-view-final span[data-tracked-deletion] {
+  display: none !important;
+}
+
+/* Render all proposed additions as plain, unmarked text */
+.tiptap-view-final span[data-tracked-insertion] {
+  background-color: transparent !important;
+  color: inherit !important;
+  text-decoration: none !important;
+}

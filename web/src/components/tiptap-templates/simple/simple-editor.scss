@@ -1,0 +1,232 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
+
+body {
+  --tt-toolbar-height: 44px;
+  --tt-theme-text: var(--tt-gray-light-900);
+
+  .dark & {
+    --tt-theme-text: var(--tt-gray-dark-900);
+  }
+}
+
+body {
+  font-family: "Inter", sans-serif;
+  color: var(--tt-theme-text);
+  font-optical-sizing: auto;
+  font-weight: 400;
+  font-style: normal;
+  padding: 0;
+  overscroll-behavior-y: none;
+}
+
+html,
+body {
+  overscroll-behavior-x: none;
+}
+
+html,
+body,
+#root,
+#app {
+  height: 100%;
+  background-color: var(--tt-bg-color);
+}
+
+::-webkit-scrollbar {
+  width: 0.25rem;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--tt-scrollbar-color) transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--tt-scrollbar-color);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tiptap.ProseMirror {
+  font-family: "DM Sans", sans-serif;
+}
+
+.simple-editor-wrapper {
+  // width: 100vw;
+  height: 100vh;
+  overflow: auto;
+}
+
+.simple-editor-search-and-replace {
+  position: fixed;
+  top: calc(var(--tt-toolbar-height) + 0.5rem);
+  right: 0.5rem;
+  z-index: 51;
+  max-height: calc(100dvh - var(--tt-toolbar-height) - 1rem);
+}
+
+.simple-editor-content {
+  // max-width: 648px;
+  width: 100%;
+  margin: 10 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.simple-editor-content .tiptap.ProseMirror.simple-editor {
+  flex: 1;
+  padding: 3rem 3rem 30vh;
+}
+
+/* Contract Page Canvas (A4 dimensions / layout) */
+.contract-page-wrapper {
+  background-color: #f8fafc; /* Subtle grey background */
+  padding: 2rem 1rem;
+  min-height: 100vh;
+}
+
+.contract-paper {
+  background: #ffffff;
+  max-width: 816px; /* ~A4 width in px at standard DPI */
+  min-height: 1056px; /* ~A4 height */
+  margin: 0 auto;
+  padding: 3rem 4rem; /* Standard 1-inch margins */
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+}
+
+/* Typography tuned for contracts */
+.tiptap {
+  outline: none;
+  font-family: 'Times New Roman', Times, Georgia, serif; /* Traditional legal font */
+  font-size: 11pt;
+  line-height: 1.6;
+  // color: #1e293b;
+}
+
+/* Justified paragraphs for formal legal presentation */
+.tiptap p {
+  margin-bottom: 1em;
+  text-align: justify;
+}
+
+/* Section headings */
+.tiptap h1, .tiptap h2, .tiptap h3 {
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+/* Legal numbered/lettered lists */
+.tiptap ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+}
+
+/* Tables in contracts */
+.tiptap table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5rem 0;
+}
+
+.tiptap td, .tiptap th {
+  border: 1px solid #cbd5e1;
+  padding: 0.5rem 0.75rem;
+}
+
+
+/* globals.css / editor.css */
+
+/* Reset base list styles */
+.editor-wrapper ol {
+  list-style-type: none;
+  padding-left: 0;
+  margin-left: 0;
+}
+
+.editor-wrapper ol > li {
+  position: relative;
+  padding-left: 2.5rem;
+  margin-bottom: 0.25rem;
+}
+
+/* ==========================================================================
+   PRESET 1: STANDARD (1. / a. / b. / i.)
+   ========================================================================== */
+.editor-wrapper[data-list-style="standard"] ol { counter-reset: std-1; }
+.editor-wrapper[data-list-style="standard"] ol > li { counter-increment: std-1; }
+.editor-wrapper[data-list-style="standard"] > ol > li::before { content: counter(std-1) "."; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="standard"] ol ol { counter-reset: std-2; }
+.editor-wrapper[data-list-style="standard"] ol ol > li { counter-increment: std-2; }
+.editor-wrapper[data-list-style="standard"] > ol > li > ol > li::before { content: counter(std-2, lower-alpha) "."; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="standard"] ol ol ol { counter-reset: std-3; }
+.editor-wrapper[data-list-style="standard"] ol ol ol > li { counter-increment: std-3; }
+.editor-wrapper[data-list-style="standard"] > ol > li > ol > li > ol > li::before { content: counter(std-3, lower-roman) "."; position: absolute; left: 0; }
+
+
+/* ==========================================================================
+   PRESET 2: PARENTHESES (1) / a) / b) / i))
+   ========================================================================== */
+.editor-wrapper[data-list-style="parentheses"] ol { counter-reset: par-1; }
+.editor-wrapper[data-list-style="parentheses"] ol > li { counter-increment: par-1; }
+.editor-wrapper[data-list-style="parentheses"] > ol > li::before { content: counter(par-1) ")"; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="parentheses"] ol ol { counter-reset: par-2; }
+.editor-wrapper[data-list-style="parentheses"] ol ol > li { counter-increment: par-2; }
+.editor-wrapper[data-list-style="parentheses"] > ol > li > ol > li::before { content: counter(par-2, lower-alpha) ")"; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="parentheses"] ol ol ol { counter-reset: par-3; }
+.editor-wrapper[data-list-style="parentheses"] ol ol ol > li { counter-increment: par-3; }
+.editor-wrapper[data-list-style="parentheses"] > ol > li > ol > li > ol > li::before { content: counter(par-3, lower-roman) ")"; position: absolute; left: 0; }
+
+
+/* ==========================================================================
+   PRESET 3: LEGAL NUMERIC (1. / 1.1. / 1.2. / 1.2.1.)
+   ========================================================================== */
+.editor-wrapper[data-list-style="legal-numeric"] ol { counter-reset: leg-1; }
+.editor-wrapper[data-list-style="legal-numeric"] ol > li { counter-increment: leg-1; }
+.editor-wrapper[data-list-style="legal-numeric"] > ol > li::before { content: counter(leg-1) "."; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="legal-numeric"] ol ol { counter-reset: leg-2; }
+.editor-wrapper[data-list-style="legal-numeric"] ol ol > li { counter-increment: leg-2; }
+.editor-wrapper[data-list-style="legal-numeric"] > ol > li > ol > li::before { content: counter(leg-1) "." counter(leg-2) "."; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="legal-numeric"] ol ol ol { counter-reset: leg-3; }
+.editor-wrapper[data-list-style="legal-numeric"] ol ol ol > li { counter-increment: leg-3; }
+.editor-wrapper[data-list-style="legal-numeric"] > ol > li > ol > li > ol > li::before { content: counter(leg-1) "." counter(leg-2) "." counter(leg-3) "."; position: absolute; left: 0; }
+
+
+/* ==========================================================================
+   PRESET 8: LEADING ZERO (01. / a. / b. / i.)
+   ========================================================================== */
+.editor-wrapper[data-list-style="leading-zero"] ol { counter-reset: lz-1; }
+.editor-wrapper[data-list-style="leading-zero"] ol > li { counter-increment: lz-1; }
+.editor-wrapper[data-list-style="leading-zero"] > ol > li::before { content: decimal-leading-zero counter(lz-1) "."; position: absolute; left: 0; }
+
+.editor-wrapper[data-list-style="leading-zero"] ol ol { counter-reset: lz-2; }
+.editor-wrapper[data-list-style="leading-zero"] ol ol > li { counter-increment: lz-2; }
+.editor-wrapper[data-list-style="leading-zero"] > ol > li > ol > li::before { content: counter(lz-2, lower-alpha) "."; position: absolute; left: 0; }
+
+@media screen and (max-width: 480px) {
+  .simple-editor-search-and-replace {
+    top: 0.5rem;
+    left: 0.5rem;
+    width: auto;
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .simple-editor-content .tiptap.ProseMirror.simple-editor {
+    padding: 1rem 1.5rem 30vh;
+  }
+}
