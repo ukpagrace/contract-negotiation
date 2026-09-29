@@ -1,0 +1,273 @@
+generator client {
+  provider             = "prisma-client"
+  output               = "../src/generated/prisma"
+  moduleFormat         = "esm"
+  importFileExtension  = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum PartyRole {
+  PROPOSER
+  COUNTERPARTY
+}
+
+enum ContractStatus {
+  DRAFT
+  WITH_COUNTERPARTY
+  WITH_PROPOSER
+  READY_TO_SIGN
+  SIGNED
+}
+
+enum ChangeType {
+  INSERT
+  DELETE
+}
+
+enum ChangeStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum Visibility {
+  SHARED
+  INTERNAL
+}
+
+enum ThreadStatus {
+  OPEN
+  RESOLVED
+  OUTDATED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+
+  sessions          Session[]
+  contractsCreated  Contract[]
+  participants      Participant[]  @relation("ParticipantUser")
+  invitedParticipants Participant[] @relation("ParticipantInvitedBy")
+  changesAuthored   Change[]       @relation("ChangeAuthor")
+  changesResolved   Change[]       @relation("ChangeResolver")
+  comments          Comment[]
+  chatMessages      ChatMessage[]
+  uploadedFiles     UploadedFile[]
+  activity          ActivityLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LoginCode {
+  id        String   @id @default(cuid())
+  email     String
+  codeHash  String
+  salt      String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+}
+
+model Contract {
+  id                 String         @id @default(cuid())
+  title              String
+  status             ContractStatus @default(DRAFT)
+  currentTurnPartyId String?
+  draftContent       Json
+  createdById        String
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  createdBy        User              @relation(fields: [createdById], references: [id])
+  currentTurnParty ContractParty?    @relation("CurrentTurn", fields: [currentTurnPartyId], references: [id])
+  parties          ContractParty[]   @relation("ContractParties")
+  invites          Invite[]
+  versions         ContractVersion[]
+  changes          Change[]
+  threads          CommentThread[]
+  chatMessages     ChatMessage[]
+  uploadedFiles    UploadedFile[]
+  signingRequests  SigningRequest[]
+  activity         ActivityLog[]
+}
+
+model ContractParty {
+  id         String    @id @default(cuid())
+  contractId String
+  role       PartyRole
+  orgName    String
+
+  contract       Contract          @relation("ContractParties", fields: [contractId], references: [id], onDelete: Cascade)
+  turnOf         Contract[]        @relation("CurrentTurn")
+  participants   Participant[]
+  invites        Invite[]
+  versionsSent   ContractVersion[]
+  changes        Change[]
+  threads        CommentThread[]
+  chatMessages   ChatMessage[]
+
+  @@unique([contractId, role])
+}
+
+model Participant {
+  id          String    @id @default(cuid())
+  partyId     String
+  userId      String
+  invitedById String?
+  joinedAt    DateTime?
+
+  party     ContractParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  user      User          @relation("ParticipantUser", fields: [userId], references: [id])
+  invitedBy User?         @relation("ParticipantInvitedBy", fields: [invitedById], references: [id])
+
+  @@unique([partyId, userId])
+}
+
+model Invite {
+  id         String    @id @default(cuid())
+  contractId String
+  partyId    String
+  email      String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+
+  contract Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  party    ContractParty @relation(fields: [partyId], references: [id], onDelete: Cascade)
+}
+
+model ContractVersion {
+  id                    String   @id @default(cuid())
+  contractId            String
+  versionNumber         Int
+  content               Json
+  sentByPartyId         String
+  sentAt                DateTime @default(now())
+  restoredFromVersionId String?
+
+  contract         Contract          @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  sentByParty      ContractParty     @relation(fields: [sentByPartyId], references: [id])
+  restoredFrom     ContractVersion?  @relation("VersionRestore", fields: [restoredFromVersionId], references: [id])
+  restoredInto     ContractVersion[] @relation("VersionRestore")
+  signingRequests  SigningRequest[]
+
+  @@unique([contractId, versionNumber])
+}
+
+model Change {
+  id               String       @id @default(cuid())
+  contractId       String
+  type             ChangeType
+  authorPartyId    String
+  authorUserId     String
+  status           ChangeStatus @default(PENDING)
+  resolvedByUserId String?
+  resolvedAt       DateTime?
+  createdAt        DateTime     @default(now())
+
+  contract    Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  authorParty ContractParty   @relation(fields: [authorPartyId], references: [id])
+  authorUser  User            @relation("ChangeAuthor", fields: [authorUserId], references: [id])
+  resolvedBy  User?           @relation("ChangeResolver", fields: [resolvedByUserId], references: [id])
+  threads     CommentThread[]
+
+  @@index([contractId, status])
+}
+
+model CommentThread {
+  id         String       @id @default(cuid())
+  contractId String
+  changeId   String?
+  partyId    String
+  visibility Visibility
+  status     ThreadStatus @default(OPEN)
+  createdAt  DateTime     @default(now())
+
+  contract Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  change   Change?       @relation(fields: [changeId], references: [id])
+  party    ContractParty @relation(fields: [partyId], references: [id])
+  comments Comment[]
+}
+
+model Comment {
+  id           String   @id @default(cuid())
+  threadId     String
+  authorUserId String
+  body         String
+  createdAt    DateTime @default(now())
+
+  thread     CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  authorUser User          @relation(fields: [authorUserId], references: [id])
+}
+
+model ChatMessage {
+  id           String     @id @default(cuid())
+  contractId   String
+  authorUserId String
+  partyId      String
+  visibility   Visibility
+  body         String
+  createdAt    DateTime   @default(now())
+
+  contract   Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  authorUser User          @relation(fields: [authorUserId], references: [id])
+  party      ContractParty @relation(fields: [partyId], references: [id])
+
+  @@index([contractId, createdAt])
+}
+
+model UploadedFile {
+  id           String   @id @default(cuid())
+  contractId   String
+  s3Key        String
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation(fields: [uploadedById], references: [id])
+}
+
+model SigningRequest {
+  id            String   @id @default(cuid())
+  contractId    String
+  versionId     String
+  provider      String
+  externalId    String?
+  status        String
+  signedDocHash String?
+  createdAt     DateTime @default(now())
+
+  contract Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version  ContractVersion @relation(fields: [versionId], references: [id])
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  contractId  String
+  actorUserId String
+  type        String
+  payload     Json
+  createdAt   DateTime @default(now())
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  actor    User     @relation(fields: [actorUserId], references: [id])
+
+  @@index([contractId, createdAt])
+}
