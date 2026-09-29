@@ -1,5 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap");
-
 body {
   --tt-toolbar-height: 44px;
   --tt-theme-text: var(--tt-gray-light-900);
@@ -7,29 +5,6 @@ body {
   .dark & {
     --tt-theme-text: var(--tt-gray-dark-900);
   }
-}
-
-body {
-  font-family: "Inter", sans-serif;
-  color: var(--tt-theme-text);
-  font-optical-sizing: auto;
-  font-weight: 400;
-  font-style: normal;
-  padding: 0;
-  overscroll-behavior-y: none;
-}
-
-html,
-body {
-  overscroll-behavior-x: none;
-}
-
-html,
-body,
-#root,
-#app {
-  height: 100%;
-  background-color: var(--tt-bg-color);
 }
 
 ::-webkit-scrollbar {
@@ -50,15 +25,6 @@ body,
   background: transparent;
 }
 
-.tiptap.ProseMirror {
-  font-family: "DM Sans", sans-serif;
-}
-
-.simple-editor-wrapper {
-  // width: 100vw;
-  height: 100vh;
-  overflow: auto;
-}
 
 .simple-editor-search-and-replace {
   position: fixed;
@@ -80,7 +46,7 @@ body,
 
 .simple-editor-content .tiptap.ProseMirror.simple-editor {
   flex: 1;
-  padding: 3rem 3rem 30vh;
+  padding: 2rem 0 4rem;
 }
 
 /* Contract Page Canvas (A4 dimensions / layout) */
@@ -104,8 +70,8 @@ body,
 /* Typography tuned for contracts */
 .tiptap {
   outline: none;
-  font-family: 'Times New Roman', Times, Georgia, serif; /* Traditional legal font */
-  font-size: 11pt;
+  font-family: 'Newsreader', Georgia, serif;
+  font-size: 1.125rem;
   line-height: 1.6;
   // color: #1e293b;
 }
@@ -118,9 +84,9 @@ body,
 
 /* Section headings */
 .tiptap h1, .tiptap h2, .tiptap h3 {
-  font-family: 'Inter', -apple-system, sans-serif;
-  font-weight: 700;
-  color: #0f172a;
+  font-family: inherit;
+  font-weight: 600;
+  color: var(--color-ink);
   margin-top: 1.5em;
   margin-bottom: 0.5em;
 }
@@ -227,6 +193,6 @@ body,
   }
 
   .simple-editor-content .tiptap.ProseMirror.simple-editor {
-    padding: 1rem 1.5rem 30vh;
+    padding: 1rem 0 3rem;
   }
 }

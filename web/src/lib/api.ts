@@ -1,3 +1,5 @@
+import type { JSONContent } from '@tiptap/react'
+
 export interface User {
   id: string
   email: string
@@ -18,6 +20,7 @@ export interface ContractDetail {
   title: string
   status: string
   currentTurnPartyId: string | null
+  draftContent: JSONContent | null
   parties: {
     id: string
     role: PartyRole
@@ -25,6 +28,11 @@ export interface ContractDetail {
     participants: { id: string; user: User }[]
     invites: { id: string; email: string; expiresAt: string }[]
   }[]
+}
+
+export interface LockHolder {
+  userId: string
+  name: string
 }
 
 export interface InviteInfo {
@@ -43,19 +51,22 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, options: { method?: string; body?: object } = {}): Promise<T> {
+  const isForm = options.body instanceof FormData
   const response = await fetch(`/api${path}`, {
     method: options.method ?? (options.body ? 'POST' : 'GET'),
-    headers: options.body ? { 'content-type': 'application/json' } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    headers: options.body && !isForm ? { 'content-type': 'application/json' } : undefined,
+    body: isForm ? (options.body as FormData) : options.body ? JSON.stringify(options.body) : undefined,
   })
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as { message?: string }
     throw new ApiError(response.status, data.message ?? response.statusText)
   }
-  return response.status === 204 ? (undefined as T) : ((await response.json()) as T)
+  // Nest sends an empty body for null results as well as for 204s.
+  const text = await response.text()
+  return (text ? JSON.parse(text) : null) as T
 }
 
-export function navigate(to: string): void {
-  history.pushState(null, '', to)
+export function navigate(to: string, state?: { notice: string }): void {
+  history.pushState(state ?? null, '', to)
   dispatchEvent(new PopStateEvent('popstate'))
 }

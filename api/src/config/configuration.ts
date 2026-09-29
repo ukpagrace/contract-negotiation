@@ -28,6 +28,7 @@ export interface AppConfig {
   port: number;
   appUrl: string;
   databaseUrl: string;
+  redisUrl: string;
   extractorUrl: string;
   extractorTimeoutMs: number;
   maxUploadBytes: number;
@@ -74,6 +75,7 @@ export function loadConfig(): AppConfig {
     port: numeric('PORT', 3000),
     appUrl: process.env.APP_URL ?? 'http://localhost:5173',
     databaseUrl: required('DATABASE_URL'),
+    redisUrl: process.env.REDIS_URL ?? 'redis://localhost:6379',
     extractorUrl: process.env.EXTRACTOR_URL ?? 'http://localhost:8001',
     extractorTimeoutMs: numeric('EXTRACTOR_TIMEOUT_MS', 120_000),
     maxUploadBytes: numeric('MAX_UPLOAD_BYTES', 25 * 1024 * 1024),

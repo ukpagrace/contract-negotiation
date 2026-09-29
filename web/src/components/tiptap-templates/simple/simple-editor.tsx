@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { EditorContent, EditorContext, useEditor } from "@tiptap/react"
+import { EditorContent, EditorContext, useEditor, type JSONContent } from "@tiptap/react"
 
 // --- Tiptap Core Extensions ---
 import { StarterKit } from "@tiptap/starter-kit"
@@ -47,7 +47,6 @@ import "@/components/tiptap-node/paragraph-node/paragraph-node.scss"
 
 // --- Tiptap UI ---
 import { HeadingDropdownMenu } from "@/components/tiptap-ui/heading-dropdown-menu"
-import { ImageUploadButton } from "@/components/tiptap-ui/image-upload-button"
 import { ListDropdownMenu } from "@/components/tiptap-ui/list-dropdown-menu"
 import { BlockquoteButton } from "@/components/tiptap-ui/blockquote-button"
 import { CodeBlockButton } from "@/components/tiptap-ui/code-block-button"
@@ -80,7 +79,6 @@ import { useWindowSize } from "@/hooks/use-window-size"
 import { useCursorVisibility } from "@/hooks/use-cursor-visibility"
 
 // --- Components ---
-import { ThemeToggle } from "@/components/tiptap-templates/simple/theme-toggle"
 
 // --- Lib ---
 import { handleImageUpload, MAX_FILE_SIZE } from "@/lib/tiptap-utils"
@@ -88,7 +86,6 @@ import { handleImageUpload, MAX_FILE_SIZE } from "@/lib/tiptap-utils"
 // --- Styles ---
 import "@/components/tiptap-templates/simple/simple-editor.scss"
 
-import content from "@/components/tiptap-templates/simple/data/content.json"
 import { TableButton } from "@/components/tiptap-ui/table-button/table-button"
 // import { useTiptapEditor } from "@/hooks/use-tiptap-editor"
 import { TableToolbarControls } from "@/components/tiptap-ui/table-button"
@@ -96,8 +93,7 @@ import { TableToolbarControls } from "@/components/tiptap-ui/table-button"
 import { RedlineExtension } from "@/components/tiptap-ui/redlining/redlineExtension"
 
 import { TrackedDeletion, TrackedInsertion } from "@/components/tiptap-ui/redlining/trackedMarks"
-import { TrackedChangePopover } from "@/components/tiptap-ui/redlining/TrackedChangePopover"
-import { RedlineToolbar, type ViewMode } from "@/components/tiptap-ui/redlining/RedlineToolbar"
+import { type ViewMode } from "@/components/tiptap-ui/redlining/RedlineToolbar"
 // import BubbleMenu from "@tiptap/extension-bubble-menu"
 
 
@@ -191,10 +187,6 @@ const MainToolbarContent = ({
       <TableButton/>
       <TableToolbarControls/>
 
-    <ToolbarSeparator />
-      <ToolbarGroup>
-        <ImageUploadButton text="Add" />
-      </ToolbarGroup>
 
       <Spacer />
 
@@ -207,7 +199,6 @@ const MainToolbarContent = ({
           data-active-state={isSearchAndReplaceOpen ? "on" : "off"}
           onClick={onSearchAndReplaceClick}
         />
-        <ThemeToggle />
       </ToolbarGroup>
     </>
   )
@@ -242,7 +233,13 @@ const MobileToolbarContent = ({
   </>
 )
 
-export function SimpleEditor() {
+interface SimpleEditorProps {
+  content: JSONContent
+  editable: boolean
+  onChange?: (content: JSONContent) => void
+}
+
+export function SimpleEditor({ content, editable, onChange }: SimpleEditorProps) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
   const [mobileView, setMobileView] = useState<"main" | "highlighter" | "link">(
@@ -252,8 +249,7 @@ export function SimpleEditor() {
   const toolbarRef = useRef<HTMLDivElement>(null)
   const searchAndReplaceButtonRef = useRef<HTMLButtonElement>(null)
 
-  const [viewMode, setViewMode] = useState<ViewMode>('full-redline')
-  const [trackingEnabled, setTrackingEnabled] = useState(true)
+  const [viewMode] = useState<ViewMode>('full-redline')
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -276,8 +272,9 @@ export function SimpleEditor() {
       }),
       TrackedInsertion,
       TrackedDeletion,
+      // Tracking starts after the first send; drafts are edited plainly.
       RedlineExtension.configure({
-        enabled: true,
+        enabled: false,
         author: "mark doe"
       }),
       TextStyle,
@@ -310,7 +307,13 @@ export function SimpleEditor() {
       }),
     ],
     content,
+    editable,
+    onUpdate: ({ editor }) => onChange?.(editor.getJSON()),
   })
+
+  useEffect(() => {
+    editor?.setEditable(editable)
+  }, [editor, editable])
 
   const rect = useCursorVisibility({
     editor,
@@ -346,7 +349,7 @@ export function SimpleEditor() {
   return (
     <div className="simple-editor-wrapper">
       <EditorContext.Provider value={{ editor }}>
-        <Toolbar
+        {editable && <Toolbar
           ref={toolbarRef}
           style={{
             ...(isMobile
@@ -371,7 +374,7 @@ export function SimpleEditor() {
               onBack={() => setMobileView("main")}
             />
           )}
-        </Toolbar>
+        </Toolbar>}
 
         <SearchAndReplace
           className="simple-editor-search-and-replace"
@@ -381,19 +384,7 @@ export function SimpleEditor() {
           scrollIntoViewOptions={SEARCH_AND_REPLACE_SCROLL_OPTIONS}
         />
 
-        <RedlineToolbar
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          trackingEnabled={trackingEnabled}
-          onToggleTracking={setTrackingEnabled}
-        />
-
-        <TrackedChangePopover
-          // onOpenComment={(change) => {
-          //   console.log('Open comment drawer for selection:', change)
-          // }}
-        />
-        <div className={`p-6 ${viewClassMap[viewMode]}`}>
+        <div className={viewClassMap[viewMode]}>
           <EditorContent
             editor={editor}
             role="presentation"

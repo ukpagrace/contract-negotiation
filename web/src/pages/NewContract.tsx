@@ -4,6 +4,8 @@ import { api, navigate, type ContractDetail } from '@/lib/api'
 import { inputClass } from './Login'
 
 export function NewContract() {
+  const [mode, setMode] = useState<'new' | 'upload'>('new')
+  const [file, setFile] = useState<File | null>(null)
   const [title, setTitle] = useState('')
   const [proposerOrgName, setProposerOrgName] = useState('')
   const [counterpartyOrgName, setCounterpartyOrgName] = useState('')
@@ -17,10 +19,16 @@ export function NewContract() {
     setBusy(true)
     setError('')
     try {
-      const contract = await api<ContractDetail>('/contracts', {
-        body: { title, proposerOrgName, counterpartyOrgName, counterpartyEmail, team },
-      })
-      navigate(`/contracts/${contract.id}`)
+      let body: object = { title, proposerOrgName, counterpartyOrgName, counterpartyEmail, team }
+      if (mode === 'upload' && file) {
+        const form = new FormData()
+        Object.entries({ title, proposerOrgName, counterpartyOrgName, counterpartyEmail }).forEach(([k, v]) => form.append(k, v))
+        form.append('team', JSON.stringify(team))
+        form.append('file', file)
+        body = form
+      }
+      const contract = await api<ContractDetail & { commentsDropped: boolean }>('/contracts', { body })
+      navigate(`/contracts/${contract.id}`, contract.commentsDropped ? { notice: "Comments in the uploaded file weren't imported." } : undefined)
     } catch (err) {
       setError((err as Error).message)
       setBusy(false)
@@ -34,12 +42,33 @@ export function NewContract() {
   return (
     <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
       <form onSubmit={submit} className="sheet px-6 py-10 sm:px-12">
+        <div className="mb-8 flex gap-6 text-sm" role="radiogroup" aria-label="How to start">
+          {(['new', 'upload'] as const).map((option) => (
+            <label key={option} className="flex cursor-pointer items-center gap-2 text-ink">
+              <input type="radio" name="mode" checked={mode === option} onChange={() => setMode(option)} className="accent-action" />
+              {option === 'new' ? 'Start from a blank page' : 'Upload a Word document'}
+            </label>
+          ))}
+        </div>
+
+        {mode === 'upload' && (
+          <label className="mb-8 block">
+            <span className="text-sm text-ink-muted">Word document (.docx)</span>
+            <input
+              className="mt-2 block w-full text-sm text-ink-muted file:mr-4 file:rounded-md file:border file:border-rule file:bg-paper file:px-3 file:py-1.5 file:text-ink hover:file:bg-muted"
+              type="file"
+              accept=".docx"
+              required
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+          </label>
+        )}
+
         <label className="block">
-          <span className="text-sm text-ink-muted">Contract name</span>
+          <span className="text-sm text-ink-muted">Contract name{mode === 'upload' && ' (optional, taken from the document if left blank)'}</span>
           <input
             className={`${inputClass} font-serif text-3xl`}
-            required
-            autoFocus
+            required={mode === 'new'}
             maxLength={200}
             placeholder="Master Services Agreement"
             value={title}

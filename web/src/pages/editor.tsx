@@ -4,7 +4,7 @@ import './editor.css'
 function editor() {
   return (
         <>
-            <SimpleEditor/>
+            <SimpleEditor content={{ type: "doc", content: [] }} editable />
         </>
   )
 }

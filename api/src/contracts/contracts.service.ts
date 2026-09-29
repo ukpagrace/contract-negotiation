@@ -22,6 +22,7 @@ export interface CreateContractInput {
   counterpartyOrgName: string;
   counterpartyEmail: string;
   team: TeamMember[];
+  upload?: { content: Prisma.InputJsonValue; s3Key: string };
 }
 
 const contractDetail = {
@@ -54,7 +55,7 @@ export class ContractsService {
       const created = await tx.contract.create({
         data: {
           title: input.title,
-          draftContent: { type: 'doc', content: [] },
+          draftContent: input.upload?.content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
           createdById: user.id,
           parties: {
             create: [
@@ -70,6 +71,9 @@ export class ContractsService {
 
       await tx.contract.update({ where: { id: created.id }, data: { currentTurnPartyId: proposer.id } });
       await tx.participant.create({ data: { partyId: proposer.id, userId: user.id, joinedAt: new Date() } });
+      if (input.upload) {
+        await tx.uploadedFile.create({ data: { contractId: created.id, s3Key: input.upload.s3Key, uploadedById: user.id } });
+      }
 
       for (const member of input.team) {
         if (member.name) {
@@ -114,8 +118,17 @@ export class ContractsService {
   }
 
   async get(user: User, contractId: string): Promise<ContractDetail> {
-    await this.partyOf(user, contractId);
-    return this.prisma.contract.findUniqueOrThrow({ where: { id: contractId }, include: contractDetail });
+    const party = await this.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId }, include: contractDetail });
+    // The working draft is private to the side whose turn it is; the other side sees what was last sent.
+    if (contract.currentTurnPartyId !== party.id) {
+      const lastSent = await this.prisma.contractVersion.findFirst({
+        where: { contractId },
+        orderBy: { versionNumber: 'desc' },
+      });
+      contract.draftContent = lastSent?.content ?? null;
+    }
+    return contract;
   }
 
   async inviteTeammate(user: User, contractId: string, member: TeamMember): Promise<void> {
