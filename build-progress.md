@@ -1,6 +1,6 @@
 # Contract Negotiation Platform: Build Progress
 
-30 September 2026. **Phases 1–7 complete. Phases 8–9 remaining.**
+30 September 2026. **Phases 1–8 complete. Phase 9 remaining.**
 
 1. [Summary](#1-summary)
 2. [Decisions log](#2-decisions-log)
@@ -24,7 +24,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 5 | Tracked changes, accept/reject, server checks | Done (as 5a + 5b) |
 | 6 | Comments, chat, live updates | Done |
 | 7 | Upload diffing, version restore | Done |
-| 8 | AI questions and explanations | Built; real Claude test pending API key |
+| 8 | AI questions and explanations | Done |
 | 9 | Ready to sign, e-signature, export | Not started |
 
 ### Technology in use
@@ -215,7 +215,7 @@ Every question raised during the build and the answer given, in order.
 - **Limit:** `AI_MAX_PER_HOUR` (default 30) per person, in memory.
 - **API:** `POST /contracts/:id/ai/explain` `{changeId}`, `/ai/summary`, `/ai/ask` `{turns}`.
 
-**Checked:** typecheck/lint/tests; browser test of AI tab + Ask AI without a key (clear "not set up" message). Real answers not yet tested.
+**Checked:** real Claude calls: explain (replacement explained as one), grouped summary, Ask AI incl. follow-ups (3–7 s each); the other side's internal comment never reached the AI; hourly limit (429), bad input (400), unknown change (404); browser test of both screens.
 
 ## 4. Remaining phases
 
