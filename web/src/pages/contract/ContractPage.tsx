@@ -7,6 +7,7 @@ import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor
 import { api, type ChangeItem, type ChatItem, type ContractDetail, type ThreadItem, type User, type VersionSummary } from '@/lib/api'
 import { ChangesPanel, type ChangeAction } from './ChangesPanel'
 import { StatusBadge } from '../Contracts'
+import { AiPanel, AskAi } from './AiPanels'
 import { ChatPanel, CommentsPanel, type ThreadTarget } from './DiscussionPanels'
 import { DocumentSection, ViewStyles, type ViewMode } from './DocumentSection'
 import { Modal, PeopleDialog } from './PeopleDialog'
@@ -344,9 +345,12 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
               />
             ),
             Chat: <ChatPanel contractId={id} userId={user.id} messages={chat} onChanged={loadChat} />,
+            AI: <AiPanel contractId={id} changes={changes} myPartyId={myParty?.id} />,
           }}
         />
       </div>
+
+      {contract.draftContent && <AskAi contractId={id} />}
 
       <PeopleDialog
         contract={contract}

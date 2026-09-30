@@ -15,6 +15,15 @@ export interface MailConfig {
   resendApiKey: string;
 }
 
+export interface AiConfig {
+  /** Which AI company to use; only 'claude' exists so far. */
+  provider: 'claude';
+  model: string;
+  apiKey: string;
+  /** AI requests allowed per person per hour. */
+  maxPerHour: number;
+}
+
 export interface LoginCodeConfig {
   length: number;
   ttlMinutes: number;
@@ -36,6 +45,7 @@ export interface AppConfig {
   loginCode: LoginCodeConfig;
   mail: MailConfig;
   r2: R2Config;
+  ai: AiConfig;
 }
 
 function required(name: string): string {
@@ -97,6 +107,12 @@ export function loadConfig(): AppConfig {
       secretAccessKey: required('R2_SECRET_ACCESS_KEY'),
       bucket: required('R2_BUCKET'),
       urlTtlSeconds: numeric('R2_URL_TTL_SECONDS', 900),
+    },
+    ai: {
+      provider: 'claude',
+      model: process.env.AI_MODEL ?? 'claude-sonnet-5-5',
+      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
+      maxPerHour: numeric('AI_MAX_PER_HOUR', 30),
     },
   };
 }

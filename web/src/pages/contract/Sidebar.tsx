@@ -7,7 +7,7 @@ export type Tab = (typeof tabs)[number]
 interface SidebarProps {
   active: Tab
   onActiveChange: (tab: Tab) => void
-  panels: Record<Exclude<Tab, 'AI'>, ReactNode>
+  panels: Record<Tab, ReactNode>
 }
 
 export function Sidebar({ active, onActiveChange, panels }: SidebarProps) {
@@ -30,11 +30,7 @@ export function Sidebar({ active, onActiveChange, panels }: SidebarProps) {
         ))}
       </div>
       <div role="tabpanel" aria-label={active} className="flex-1 overflow-y-auto p-5">
-        {active === 'AI' ? (
-          <p className="text-sm leading-relaxed text-ink-muted">Ask questions about the document or get a plain-language summary of the changes.</p>
-        ) : (
-          panels[active]
-        )}
+        {panels[active]}
       </div>
     </aside>
   )

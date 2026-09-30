@@ -24,7 +24,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 5 | Tracked changes, accept/reject, server checks | Done (as 5a + 5b) |
 | 6 | Comments, chat, live updates | Done |
 | 7 | Upload diffing, version restore | Done |
-| 8 | AI questions and explanations | Not started |
+| 8 | AI questions and explanations | Built; real Claude test pending API key |
 | 9 | Ready to sign, e-signature, export | Not started |
 
 ### Technology in use
@@ -72,6 +72,7 @@ Every question raised during the build and the answer given, in order.
 | 25 | Phase 7 | What does restoring a version bring back? | Your own side's proposals in that version applied, the other side's undone. |
 | 26 | Phase 7 | Tables: what happens on accept? | Deleted text in a cell → cell left empty. All text in a row deleted → accepting removes the row; same for a column. Already-empty rows/columns kept; merged-cell tables only empty cells. |
 | 27 | Phase 7 | Removed list items / table rows in an upload? | Shown in their own bullet / row. Removed table columns in an upload: later (full table matching). |
+| 28 | Phase 8 | How should AI work? | AI tab: **Explain all changes** summary + **Explain** per pending change. **Ask AI**: floating button bottom-right opening a chat window. Neither stored. Claude Sonnet 5.5 behind a swappable provider; 30 AI requests per person per hour. |
 
 ### Technical choices made along the way
 
@@ -206,15 +207,17 @@ Every question raised during the build and the answer given, in order.
 
 ---
 
-## 4. Remaining phases
-
 ### Phase 8: AI
-**To do:**
-- **Ask AI** about the document; sees only document content and changes, never internal comments/chat.
-- **AI explanation** tab: plain-language summary of changes, generated on demand (not stored in v1).
+- **AI tab:** note on what the AI sees; **Explain all changes** (grouped summary: who proposed what and what it means); each pending change with **Explain** (2–4 plain sentences; replacements explained as a whole).
+- **Ask AI:** floating button bottom-right (left of the sidebar on wide screens, so it doesn't cover the chat box). Chat window; conversation kept in the page only.
+- **What the AI sees:** only the document the person can currently see, as text with changes marked `[change 2, added by Acme: …]`. Never comments or chat. Told who's asking, to be neutral, plain-language, and to suggest a lawyer where law matters.
+- **Provider:** `api/src/ai/` – `AiProvider` interface + `ClaudeProvider` (`@anthropic-ai/sdk`), chosen in `ai.module.ts`. Model `AI_MODEL` (default `claude-sonnet-5-5`), key `ANTHROPIC_API_KEY`. Low effort for explanations/chat, medium for the summary. Contract text prompt-cached. Server-side refusal fallback on. Clear errors when the key is missing, the AI is busy, or it fails.
+- **Limit:** `AI_MAX_PER_HOUR` (default 30) per person, in memory.
+- **API:** `POST /contracts/:id/ai/explain` `{changeId}`, `/ai/summary`, `/ai/ask` `{turns}`.
 
-**Open questions:**
-- Which AI model/provider, and any cost limits?
+**Checked:** typecheck/lint/tests; browser test of AI tab + Ask AI without a key (clear "not set up" message). Real answers not yet tested.
+
+## 4. Remaining phases
 
 ### Phase 9: Signing and export
 **To do:**
