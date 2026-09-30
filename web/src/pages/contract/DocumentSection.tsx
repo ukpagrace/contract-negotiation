@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
 import { Button } from '@/components/ui/button'
-import { api, type ContractDetail, type LockHolder, type User } from '@/lib/api'
+import type { AnchoredThread } from '@/components/tiptap-ui/redlining/commentAnchors'
+import { api, type Anchor, type ContractDetail, type LockHolder, type User } from '@/lib/api'
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] }
 const HEARTBEAT_MS = 20_000
@@ -34,9 +35,17 @@ interface DocumentSectionProps {
   selectedChangeId: string | null
   onSelectChange: (changeId: string) => void
   onSaved: () => void
+  // Bumped by live updates whenever the edit lock changes hands.
+  lockSignal: number
+  anchors: AnchoredThread[]
+  onAnchorsFound: (threadIds: string[]) => void
+  selectedThreadId: string | null
+  onSelectThread: (threadId: string) => void
+  onComment: (anchor: Anchor) => void
 }
 
-export function DocumentSection({ contract, user, canEdit, myPartyId, view, selectedChangeId, onSelectChange, onSaved }: DocumentSectionProps) {
+export function DocumentSection(props: DocumentSectionProps) {
+  const { contract, user, canEdit, myPartyId, view, selectedChangeId, onSelectChange, onSaved, lockSignal } = props
   const tracking = contract.status !== 'DRAFT'
   const id = contract.id
   const [saved, setSaved] = useState<JSONContent>(contract.draftContent ?? EMPTY_DOC)
@@ -50,14 +59,28 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view, sele
   const lastActivity = useRef(Date.now())
   const fileInput = useRef<HTMLInputElement>(null)
 
-  // Teammates learn about the lock by polling until live updates arrive.
+  const lockedByOther = lock !== null && lock.userId !== user.id
+
+  function discard(message: string) {
+    setEditing(false)
+    latest.current = saved
+    setVersion((v) => v + 1)
+    setError(`${message} Your unsaved changes were discarded.`)
+  }
+
+  // Re-checked on every lock event. A lock that lapses from inactivity sends no event, so while
+  // a teammate holds it we also look again now and then.
   useEffect(() => {
-    if (editing) return
-    const check = () => api<LockHolder | null>(`/contracts/${id}/lock`).then(setLock, () => undefined)
+    const check = () =>
+      api<LockHolder | null>(`/contracts/${id}/lock`).then((holder) => {
+        if (!editing) setLock(holder)
+        else if (holder && holder.userId !== user.id) discard(`${holder.name} is editing.`)
+      }, () => undefined)
     void check()
-    const timer = setInterval(check, 10_000)
+    if (!lockedByOther) return
+    const timer = setInterval(check, 30_000)
     return () => clearInterval(timer)
-  }, [editing, id])
+  }, [editing, id, lockSignal, lockedByOther, saved])
 
   useEffect(() => {
     if (!editing) return
@@ -69,12 +92,7 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view, sele
     // Only renew while the person is active, so an abandoned tab lets the lock expire.
     const timer = setInterval(() => {
       if (Date.now() - lastActivity.current > IDLE_MS) return
-      api(`/contracts/${id}/lock`, { body: {} }).catch((err: Error) => {
-        setEditing(false)
-        latest.current = saved
-        setVersion((v) => v + 1)
-        setError(`${err.message} Your unsaved changes were discarded.`)
-      })
+      api(`/contracts/${id}/lock`, { body: {} }).catch((err: Error) => discard(err.message))
     }, HEARTBEAT_MS)
     return () => {
       clearInterval(timer)
@@ -141,18 +159,20 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view, sele
     })
   }
 
-  const lockedByOther = lock !== null && lock.userId !== user.id
-
   return (
     <section
       className="sheet"
       onClick={(event) => {
-        const changeId = (event.target as HTMLElement).closest<HTMLElement>('[data-change-id]')?.dataset.changeId
-        if (changeId) onSelectChange(changeId)
+        const target = (event.target as HTMLElement).closest<HTMLElement>('[data-change-id], [data-thread-id]')
+        if (target?.dataset.threadId) props.onSelectThread(target.dataset.threadId)
+        else if (target?.dataset.changeId) onSelectChange(target.dataset.changeId)
       }}
     >
       {selectedChangeId && (
         <style>{`.ProseMirror [data-change-id="${CSS.escape(selectedChangeId)}"] { outline: 2px solid var(--color-action); outline-offset: 1px; border-radius: 2px; }`}</style>
+      )}
+      {props.selectedThreadId && (
+        <style>{`.ProseMirror [data-thread-id="${CSS.escape(props.selectedThreadId)}"] { background: rgb(250 204 21 / 0.6); }`}</style>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-6 py-4 sm:px-12">
         <span className="text-sm text-ink-muted">
@@ -184,6 +204,9 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view, sele
             content={latest.current}
             editable={editing}
             trackAsPartyId={tracking ? myPartyId : undefined}
+            anchors={props.anchors}
+            onAnchorsFound={props.onAnchorsFound}
+            onComment={props.onComment}
             onChange={(content) => {
               latest.current = content
               lastActivity.current = Date.now()

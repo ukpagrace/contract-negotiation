@@ -57,6 +57,7 @@ model User {
   changesAuthored   Change[]       @relation("ChangeAuthor")
   changesResolved   Change[]       @relation("ChangeResolver")
   comments          Comment[]
+  threadsResolved   CommentThread[] @relation("ThreadResolver")
   chatMessages      ChatMessage[]
   uploadedFiles     UploadedFile[]
   activity          ActivityLog[]
@@ -201,12 +202,20 @@ model CommentThread {
   partyId    String
   visibility Visibility
   status     ThreadStatus @default(OPEN)
-  createdAt  DateTime     @default(now())
+  // Text threads are anchored by the quoted text and a little context either side, not by a
+  // mark in the document, so internal threads leave no trace in what the other side receives.
+  quote            String?
+  prefix           String?
+  suffix           String?
+  resolvedByUserId String?
+  resolvedAt       DateTime?
+  createdAt        DateTime     @default(now())
 
-  contract Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  change   Change?       @relation(fields: [changeId], references: [id])
-  party    ContractParty @relation(fields: [partyId], references: [id])
-  comments Comment[]
+  contract   Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  change     Change?       @relation(fields: [changeId], references: [id])
+  party      ContractParty @relation(fields: [partyId], references: [id])
+  resolvedBy User?         @relation("ThreadResolver", fields: [resolvedByUserId], references: [id])
+  comments   Comment[]
 }
 
 model Comment {
@@ -215,6 +224,8 @@ model Comment {
   authorUserId String
   body         String
   createdAt    DateTime @default(now())
+  editedAt     DateTime?
+  deletedAt    DateTime?
 
   thread     CommentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   authorUser User          @relation(fields: [authorUserId], references: [id])
@@ -228,6 +239,8 @@ model ChatMessage {
   visibility   Visibility
   body         String
   createdAt    DateTime   @default(now())
+  editedAt     DateTime?
+  deletedAt    DateTime?
 
   contract   Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
   authorUser User          @relation(fields: [authorUserId], references: [id])

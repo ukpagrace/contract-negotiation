@@ -207,3 +207,19 @@ body {
   color: var(--color-delete);
   text-decoration: line-through;
 }
+
+/* Comment threads */
+.tiptap .comment-anchor {
+  background: rgb(250 204 21 / 0.28);
+  border-bottom: 2px solid rgb(202 138 4 / 0.6);
+  cursor: pointer;
+}
+.comment-bubble {
+  background: var(--color-action);
+  color: #fff;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgb(24 33 47 / 0.25);
+  cursor: pointer;
+}

@@ -14,11 +14,12 @@ interface ChangesPanelProps {
   error: string
   onSelect: (id: string) => void
   onAction: (id: string, action: ChangeAction) => void
+  onComment: (change: ChangeItem) => void
 }
 
 const snippet = (text: string) => (text.length > 120 ? `${text.slice(0, 120)}…` : text)
 
-export function ChangesPanel({ changes, tracking, myPartyId, myTurn, selectedId, busyId, error, onSelect, onAction }: ChangesPanelProps) {
+export function ChangesPanel({ changes, tracking, myPartyId, myTurn, selectedId, busyId, error, onSelect, onAction, onComment }: ChangesPanelProps) {
   const selectedRef = useRef<HTMLLIElement>(null)
 
   useEffect(() => {
@@ -65,9 +66,9 @@ export function ChangesPanel({ changes, tracking, myPartyId, myTurn, selectedId,
                   {snippet(change.text)}
                 </span>
               </button>
-              {myTurn && (
-                <div className="mt-3 flex gap-2">
-                  {own ? (
+              <div className="mt-3 flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => onComment(change)}>Comment</Button>
+                {myTurn && (own ? (
                     <Button size="sm" variant="outline" disabled={busyId !== null} onClick={() => onAction(change.id, 'withdraw')}>
                       Withdraw
                     </Button>
@@ -80,9 +81,8 @@ export function ChangesPanel({ changes, tracking, myPartyId, myTurn, selectedId,
                         Reject
                       </Button>
                     </>
-                  )}
-                </div>
-              )}
+                  ))}
+              </div>
             </li>
           )
         })}

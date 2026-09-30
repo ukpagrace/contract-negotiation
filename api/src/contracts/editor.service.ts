@@ -18,12 +18,13 @@ import { createClient } from 'redis';
 
 import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { ChangeStatus, ContractStatus, PartyRole, type Prisma, type User } from '../generated/prisma/client.js';
+import { ChangeStatus, ContractStatus, PartyRole, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
 import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { contractSentEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
 import { baseSignature, collectChanges, resolveChange, type ChangeKind, type DocNode } from './changes.js';
 import { ContractsService, INVITE_TTL_MS } from './contracts.service.js';
+import { EventsService } from './events.service.js';
 
 const LOCK_TTL_MS = 60_000;
 
@@ -61,6 +62,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     private readonly contracts: ContractsService,
     private readonly config: ConfigService<AppConfig, true>,
     @Inject(MAIL_PROVIDER) private readonly mail: MailProvider,
+    private readonly events: EventsService,
   ) {
     this.redis = createClient({ url: config.get('redisUrl', { infer: true }) });
     const r2 = config.get('r2', { infer: true });
@@ -88,10 +90,11 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
 
   // Also the heartbeat: the editor calls this while the user is active to keep the lock alive.
   async acquireLock(user: User, contractId: string, takeOver: boolean): Promise<LockHolder> {
-    await this.assertCanEdit(user, contractId);
+    const party = await this.assertCanEdit(user, contractId);
     const key = this.lockKey(contractId);
     if (takeOver) {
       await this.redis.set(key, user.id, { expiration: { type: 'PX', value: LOCK_TTL_MS } });
+      this.events.publish(contractId, 'lock', party.id);
     } else {
       const taken = await this.redis.set(key, user.id, { expiration: { type: 'PX', value: LOCK_TTL_MS }, condition: 'NX' });
       if (!taken) {
@@ -100,16 +103,19 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
           throw new ConflictException(`${(await this.holder(holderId)).name} is editing.`);
         }
         await this.redis.set(key, user.id, { expiration: { type: 'PX', value: LOCK_TTL_MS } });
+      } else {
+        this.events.publish(contractId, 'lock', party.id);
       }
     }
     return this.holder(user.id);
   }
 
   async releaseLock(user: User, contractId: string): Promise<void> {
-    await this.contracts.partyOf(user, contractId);
+    const party = await this.contracts.partyOf(user, contractId);
     const key = this.lockKey(contractId);
     if ((await this.redis.get(key)) === user.id) {
       await this.redis.del(key);
+      this.events.publish(contractId, 'lock', party.id);
     }
   }
 
@@ -154,6 +160,8 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       ...writes,
     ]);
     await this.redis.del(this.lockKey(contractId));
+    this.events.publish(contractId, 'document', party.id);
+    this.events.publish(contractId, 'lock', party.id);
   }
 
   async listChanges(user: User, contractId: string): Promise<ChangeItem[]> {
@@ -223,6 +231,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
         data: { contractId, actorUserId: user.id, type: `CHANGE_${action.toUpperCase()}`, payload: { changeId } },
       });
     });
+    this.events.publish(contractId, 'document', party.id);
   }
 
   async replaceWithUpload(
@@ -284,6 +293,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
         data: { contractId, actorUserId: user.id, type: 'SENT', payload: { versionNumber } },
       });
     });
+    this.events.publish(contractId, 'document');
 
     const appUrl = this.config.get('appUrl', { infer: true });
     const recipients: { email: string; link: string }[] = [];
@@ -339,7 +349,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     return { title: result.title, content: result.content, commentsDropped: result.commentsDropped, s3Key };
   }
 
-  private async assertCanEdit(user: User, contractId: string): Promise<void> {
+  private async assertCanEdit(user: User, contractId: string): Promise<ContractParty> {
     const party = await this.contracts.partyOf(user, contractId);
     const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
     if (contract.currentTurnPartyId !== party.id) {
@@ -348,6 +358,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     if (contract.status === ContractStatus.READY_TO_SIGN || contract.status === ContractStatus.SIGNED) {
       throw new ForbiddenException('This contract can no longer be edited.');
     }
+    return party;
   }
 
   private async assertHoldsLock(user: User, contractId: string): Promise<void> {

@@ -91,6 +91,13 @@ import { TableButton } from "@/components/tiptap-ui/table-button/table-button"
 import { TableToolbarControls } from "@/components/tiptap-ui/table-button"
 // import type { ListStylePreset } from "@/components/tiptap-ui/list-style/list-style"
 import { RedlineExtension } from "@/components/tiptap-ui/redlining/redlineExtension"
+import {
+  anchorFromSelection,
+  CommentAnchors,
+  commentAnchorsKey,
+  type AnchoredThread,
+} from "@/components/tiptap-ui/redlining/commentAnchors"
+import type { Anchor } from "@/lib/api"
 
 import { type ViewMode } from "@/components/tiptap-ui/redlining/RedlineToolbar"
 // import BubbleMenu from "@tiptap/extension-bubble-menu"
@@ -238,9 +245,14 @@ interface SimpleEditorProps {
   onChange?: (content: JSONContent) => void
   // Set once the contract has been sent: edits become tracked changes attributed to this side.
   trackAsPartyId?: string
+  // Comment threads to highlight; onAnchorsFound reports which ones were found in the text.
+  anchors?: AnchoredThread[]
+  onAnchorsFound?: (threadIds: string[]) => void
+  // When set, selecting text while reading shows a Comment button.
+  onComment?: (anchor: Anchor) => void
 }
 
-export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: SimpleEditorProps) {
+export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anchors, onAnchorsFound, onComment }: SimpleEditorProps) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
   const [mobileView, setMobileView] = useState<"main" | "highlighter" | "link">(
@@ -251,6 +263,9 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: Si
   const searchAndReplaceButtonRef = useRef<HTMLButtonElement>(null)
 
   const [viewMode] = useState<ViewMode>('full-redline')
+  // The editor is created once, so it calls the latest callback through a ref.
+  const onAnchorsFoundRef = useRef(onAnchorsFound)
+  onAnchorsFoundRef.current = onAnchorsFound
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -275,6 +290,7 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: Si
         enabled: Boolean(trackAsPartyId),
         partyId: trackAsPartyId ?? "",
       }),
+      CommentAnchors.configure({ onFound: (ids) => onAnchorsFoundRef.current?.(ids) }),
       TextStyle,
       Color, 
       Table.configure({ resizable: true }),
@@ -312,6 +328,10 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: Si
   useEffect(() => {
     editor?.setEditable(editable)
   }, [editor, editable])
+
+  useEffect(() => {
+    if (editor && anchors) editor.view.dispatch(editor.state.tr.setMeta(commentAnchorsKey, anchors))
+  }, [editor, anchors])
 
   const rect = useCursorVisibility({
     editor,
@@ -381,6 +401,24 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: Si
           onClose={closeSearchAndReplace}
           scrollIntoViewOptions={SEARCH_AND_REPLACE_SCROLL_OPTIONS}
         />
+
+        {editor && onComment && !editable && (
+          <BubbleMenu editor={editor} shouldShow={({ state }) => !state.selection.empty}>
+            <button
+              type="button"
+              className="comment-bubble"
+              // Keeps the text selected while clicking.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                const anchor = anchorFromSelection(editor.state)
+                editor.commands.setTextSelection(editor.state.selection.to)
+                if (anchor) onComment(anchor)
+              }}
+            >
+              Comment
+            </button>
+          </BubbleMenu>
+        )}
 
         <div className={viewClassMap[viewMode]}>
           <EditorContent

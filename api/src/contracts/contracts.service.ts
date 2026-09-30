@@ -8,6 +8,7 @@ import { PartyRole, type ContractParty, type Prisma, type User } from '../genera
 import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { inviteEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
+import { EventsService } from './events.service.js';
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -42,6 +43,7 @@ export class ContractsService {
     private readonly prisma: PrismaService,
     @Inject(MAIL_PROVIDER) private readonly mail: MailProvider,
     private readonly config: ConfigService<AppConfig, true>,
+    private readonly events: EventsService,
   ) {}
 
   async create(user: User, input: CreateContractInput): Promise<ContractDetail> {
@@ -191,6 +193,7 @@ export class ContractsService {
       },
     });
     await this.sendInvite(user, contract.title, member.email, token);
+    this.events.publish(contractId, 'contract');
   }
 
   async renameOwnOrg(user: User, contractId: string, orgName: string): Promise<void> {
@@ -209,6 +212,7 @@ export class ContractsService {
         },
       }),
     ]);
+    this.events.publish(contractId, 'contract');
   }
 
   async lookupInvite(token: string): Promise<{ email: string; contractTitle: string; role: PartyRole }> {
@@ -229,6 +233,7 @@ export class ContractsService {
       }),
       this.prisma.invite.update({ where: { id: invite.id }, data: { acceptedAt: invite.acceptedAt ?? new Date() } }),
     ]);
+    this.events.publish(invite.contractId, 'contract');
     return { contractId: invite.contractId };
   }
 

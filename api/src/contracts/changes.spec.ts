@@ -1,4 +1,4 @@
-import { baseSignature, collectChanges, resolveChange, type DocNode } from './changes.js';
+import { baseSignature, collectChanges, plainText, resolveChange, type DocNode } from './changes.js';
 
 const ins = (changeId: string, authorPartyId: string) => ({ type: 'trackedInsertion', attrs: { changeId, authorPartyId } });
 const del = (changeId: string, authorPartyId: string) => ({ type: 'trackedDeletion', attrs: { changeId, authorPartyId } });
@@ -73,5 +73,11 @@ describe('baseSignature', () => {
   it('allows proposing to delete the other side’s insertion', () => {
     const edited = doc([text('Payment within '), text('30', del('d1', 'B')), text('45', ins('i1', 'B'), del('d9', 'A')), text(' days.')]);
     expect(baseSignature(edited, 'A')).toBe(baseSignature(sample, 'A'));
+  });
+});
+
+describe('plainText', () => {
+  it('ends every block with a newline', () => {
+    expect(plainText(doc([text('One '), text('two', ins('i1', 'B'))], [text('Three')]))).toBe('One two\nThree\n');
   });
 });

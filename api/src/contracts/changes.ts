@@ -123,3 +123,12 @@ export function resolveChange(doc: DocNode, changeId: string, accept: boolean): 
     }) ?? { type: 'doc', content: [{ type: 'paragraph' }] }
   );
 }
+
+// The document's text as comment anchors see it: every block ends with a newline. The web
+// editor flattens its document the same way, so a quote taken there can be found here.
+export function plainText(node: DocNode): string {
+  if (node.type === 'text') return node.text ?? '';
+  if (node.type === 'hardBreak') return '\n';
+  const inner = (node.content ?? []).map(plainText).join('');
+  return node.type === 'doc' ? inner : `${inner}\n`;
+}

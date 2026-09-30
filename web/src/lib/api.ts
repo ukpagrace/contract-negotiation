@@ -46,6 +46,46 @@ export interface ChangeItem {
   createdAt: string
 }
 
+export type Visibility = 'SHARED' | 'INTERNAL'
+
+export interface Anchor {
+  quote: string
+  prefix: string
+  suffix: string
+}
+
+export interface CommentItem {
+  id: string
+  authorUserId: string
+  authorName: string
+  body: string
+  createdAt: string
+  editedAt: string | null
+  deletedAt: string | null
+}
+
+export interface ThreadItem {
+  id: string
+  changeId: string | null
+  partyId: string
+  orgName: string
+  visibility: Visibility
+  status: 'OPEN' | 'RESOLVED'
+  quote: string | null
+  prefix: string | null
+  suffix: string | null
+  resolvedByName: string | null
+  resolvedAt: string | null
+  createdAt: string
+  comments: CommentItem[]
+}
+
+export interface ChatItem extends CommentItem {
+  partyId: string
+  orgName: string
+  visibility: Visibility
+}
+
 export interface LockHolder {
   userId: string
   name: string

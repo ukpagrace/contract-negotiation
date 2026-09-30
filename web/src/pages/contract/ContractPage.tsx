@@ -1,12 +1,13 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { DropdownMenu } from 'radix-ui'
 import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
-import { api, type ChangeItem, type ContractDetail, type User, type VersionSummary } from '@/lib/api'
+import { api, type ChangeItem, type ChatItem, type ContractDetail, type ThreadItem, type User, type VersionSummary } from '@/lib/api'
 import { ChangesPanel, type ChangeAction } from './ChangesPanel'
 import { StatusBadge } from '../Contracts'
+import { ChatPanel, CommentsPanel, type ThreadTarget } from './DiscussionPanels'
 import { DocumentSection, ViewStyles, type ViewMode } from './DocumentSection'
 import { Modal, PeopleDialog } from './PeopleDialog'
 import { Sidebar, type Tab } from './Sidebar'
@@ -54,6 +55,13 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   const [changeError, setChangeError] = useState('')
   // Bumped when the server rewrites the document (accept/reject), so the editor reloads it.
   const [docVersion, setDocVersion] = useState(0)
+  const [lockSignal, setLockSignal] = useState(0)
+  const [threads, setThreads] = useState<ThreadItem[]>([])
+  const [chat, setChat] = useState<ChatItem[]>([])
+  const [threadTarget, setThreadTarget] = useState<ThreadTarget | null>(null)
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  // Ids of text threads whose text the editor found; null until it has looked.
+  const [foundThreadIds, setFoundThreadIds] = useState<string[] | null>(null)
 
   async function load() {
     try {
@@ -68,20 +76,52 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
     }
   }
 
+  const loadThreads = () => api<ThreadItem[]>(`/contracts/${id}/threads`).then(setThreads, () => undefined)
+  const loadChat = () => api<ChatItem[]>(`/contracts/${id}/chat`).then(setChat, () => undefined)
+
   useEffect(() => {
     void load()
   }, [id, user.name])
 
+  useEffect(() => {
+    void loadThreads()
+    void loadChat()
+    const source = new EventSource(`/api/contracts/${id}/events`)
+    let dropped = false
+    source.onmessage = (event: MessageEvent<string>) => {
+      const { type } = JSON.parse(event.data) as { type: string }
+      if (type === 'contract') void load()
+      else if (type === 'document') void load().then(() => setDocVersion((v) => v + 1))
+      else if (type === 'lock') setLockSignal((n) => n + 1)
+      else if (type === 'comments') void loadThreads()
+      else if (type === 'chat') void loadChat()
+    }
+    // The browser reconnects by itself; afterwards, catch up on anything missed meanwhile.
+    source.onerror = () => {
+      dropped = true
+    }
+    source.onopen = () => {
+      if (!dropped) return
+      dropped = false
+      void load()
+      void loadThreads()
+      void loadChat()
+      setLockSignal((n) => n + 1)
+    }
+    return () => source.close()
+  }, [id])
+
+  const anchors = useMemo(
+    () =>
+      threads
+        .filter((t) => t.status === 'OPEN' && t.quote !== null && t.prefix !== null && t.suffix !== null)
+        .map((t) => ({ threadId: t.id, quote: t.quote!, prefix: t.prefix!, suffix: t.suffix! })),
+    [threads],
+  )
+
   const myTurn = contract !== null && contract.currentTurnPartyId !== null && contract.parties.some(
     (party) => party.id === contract.currentTurnPartyId && party.participants.some((p) => p.user.id === user.id),
   )
-
-  // Picks up the other side sending it back; live updates replace this in Phase 6.
-  useEffect(() => {
-    if (!contract || myTurn) return
-    const timer = setInterval(() => void load(), 15_000)
-    return () => clearInterval(timer)
-  }, [contract?.currentTurnPartyId, myTurn])
 
   async function openVersion(version: VersionSummary) {
     const { content } = await api<{ content: JSONContent }>(`/contracts/${id}/versions/${version.versionNumber}`)
@@ -92,6 +132,23 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
     setSelectedChangeId(changeId)
     setSidebarTab('Changes')
   }
+
+  function selectThread(threadId: string) {
+    setSelectedThreadId(threadId)
+    setSidebarTab('Comments')
+  }
+
+  function startThread(target: ThreadTarget) {
+    setThreadTarget(target)
+    setSelectedThreadId(null)
+    setSidebarTab('Comments')
+  }
+
+  // Text threads are outdated when their text is gone; change threads when the change is no longer pending.
+  const isOutdated = (thread: ThreadItem) =>
+    thread.prefix === null
+      ? !changes.some((change) => change.id === thread.changeId)
+      : foundThreadIds !== null && !foundThreadIds.includes(thread.id)
 
   async function resolveChange(changeId: string, action: ChangeAction) {
     setChangeBusy(changeId)
@@ -210,6 +267,12 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                 selectedChangeId={selectedChangeId}
                 onSelectChange={selectChange}
                 onSaved={() => void load()}
+                lockSignal={lockSignal}
+                anchors={anchors}
+                onAnchorsFound={setFoundThreadIds}
+                selectedThreadId={selectedThreadId}
+                onSelectThread={selectThread}
+                onComment={(anchor) => startThread({ anchor })}
               />
             </div>
           </div>
@@ -217,7 +280,8 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
         <Sidebar
           active={sidebarTab}
           onActiveChange={setSidebarTab}
-          changes={
+          panels={{
+            Changes: (
             <ChangesPanel
               changes={changes}
               tracking={contract.status !== 'DRAFT'}
@@ -228,8 +292,30 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
               error={changeError}
               onSelect={setSelectedChangeId}
               onAction={(changeId, action) => void resolveChange(changeId, action)}
+              onComment={(change) => startThread({ changeId: change.id, quote: change.text })}
             />
-          }
+            ),
+            Comments: (
+              <CommentsPanel
+                contractId={id}
+                userId={user.id}
+                threads={threads}
+                target={threadTarget}
+                isOutdated={isOutdated}
+                selectedId={selectedThreadId}
+                onSelect={(thread) => {
+                  setSelectedThreadId(thread.id)
+                  const selector = thread.prefix === null && thread.changeId
+                    ? `[data-change-id="${CSS.escape(thread.changeId)}"]`
+                    : `[data-thread-id="${CSS.escape(thread.id)}"]`
+                  document.querySelector(`.ProseMirror ${selector}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+                }}
+                onCancelTarget={() => setThreadTarget(null)}
+                onChanged={loadThreads}
+              />
+            ),
+            Chat: <ChatPanel contractId={id} userId={user.id} messages={chat} onChanged={loadChat} />,
+          }}
         />
       </div>
 
