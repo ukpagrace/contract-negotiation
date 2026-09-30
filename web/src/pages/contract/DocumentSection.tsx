@@ -31,9 +31,12 @@ interface DocumentSectionProps {
   canEdit: boolean
   myPartyId: string | undefined
   view: ViewMode
+  selectedChangeId: string | null
+  onSelectChange: (changeId: string) => void
+  onSaved: () => void
 }
 
-export function DocumentSection({ contract, user, canEdit, myPartyId, view }: DocumentSectionProps) {
+export function DocumentSection({ contract, user, canEdit, myPartyId, view, selectedChangeId, onSelectChange, onSaved }: DocumentSectionProps) {
   const tracking = contract.status !== 'DRAFT'
   const id = contract.id
   const [saved, setSaved] = useState<JSONContent>(contract.draftContent ?? EMPTY_DOC)
@@ -115,6 +118,7 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view }: Do
       await api(`/contracts/${id}/lock`, { body: {} })
       await api(`/contracts/${id}/draft`, { method: 'PUT', body: { content: latest.current } })
       setSaved(latest.current)
+      onSaved()
       setEditing(false)
     })
   }
@@ -140,7 +144,16 @@ export function DocumentSection({ contract, user, canEdit, myPartyId, view }: Do
   const lockedByOther = lock !== null && lock.userId !== user.id
 
   return (
-    <section className="sheet">
+    <section
+      className="sheet"
+      onClick={(event) => {
+        const changeId = (event.target as HTMLElement).closest<HTMLElement>('[data-change-id]')?.dataset.changeId
+        if (changeId) onSelectChange(changeId)
+      }}
+    >
+      {selectedChangeId && (
+        <style>{`.ProseMirror [data-change-id="${CSS.escape(selectedChangeId)}"] { outline: 2px solid var(--color-action); outline-offset: 1px; border-radius: 2px; }`}</style>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-6 py-4 sm:px-12">
         <span className="text-sm text-ink-muted">
           {editing ? (tracking ? 'Editing. Your changes are tracked.' : 'Editing. Save to share with your team.') : lockedByOther ? `${lock.name} is editing` : contract.draftContent ? 'Document' : ''}

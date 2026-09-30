@@ -4,11 +4,12 @@ import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
-import { api, type ContractDetail, type User, type VersionSummary } from '@/lib/api'
+import { api, type ChangeItem, type ContractDetail, type User, type VersionSummary } from '@/lib/api'
+import { ChangesPanel, type ChangeAction } from './ChangesPanel'
 import { StatusBadge } from '../Contracts'
 import { DocumentSection, ViewStyles, type ViewMode } from './DocumentSection'
 import { Modal, PeopleDialog } from './PeopleDialog'
-import { Sidebar } from './Sidebar'
+import { Sidebar, type Tab } from './Sidebar'
 
 const viewLabels: Record<ViewMode, string> = {
   both: "Both sides' changes",
@@ -46,10 +47,22 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   const [sendOpen, setSendOpen] = useState(false)
   const [sendError, setSendError] = useState('')
   const [sending, setSending] = useState(false)
+  const [changes, setChanges] = useState<ChangeItem[]>([])
+  const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null)
+  const [sidebarTab, setSidebarTab] = useState<Tab>('Changes')
+  const [changeBusy, setChangeBusy] = useState<string | null>(null)
+  const [changeError, setChangeError] = useState('')
+  // Bumped when the server rewrites the document (accept/reject), so the editor reloads it.
+  const [docVersion, setDocVersion] = useState(0)
 
   async function load() {
     try {
-      setContract(await api<ContractDetail>(`/contracts/${id}`))
+      const [detail, pending] = await Promise.all([
+        api<ContractDetail>(`/contracts/${id}`),
+        api<ChangeItem[]>(`/contracts/${id}/changes`),
+      ])
+      setContract(detail)
+      setChanges(pending)
     } catch (err) {
       setError((err as Error).message)
     }
@@ -73,6 +86,26 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   async function openVersion(version: VersionSummary) {
     const { content } = await api<{ content: JSONContent }>(`/contracts/${id}/versions/${version.versionNumber}`)
     setViewing({ ...version, content })
+  }
+
+  function selectChange(changeId: string) {
+    setSelectedChangeId(changeId)
+    setSidebarTab('Changes')
+  }
+
+  async function resolveChange(changeId: string, action: ChangeAction) {
+    setChangeBusy(changeId)
+    setChangeError('')
+    try {
+      await api(`/contracts/${id}/changes/${changeId}/${action}`, { method: 'POST' })
+      setSelectedChangeId(null)
+      await load()
+      setDocVersion((v) => v + 1)
+    } catch (err) {
+      setChangeError((err as Error).message)
+    } finally {
+      setChangeBusy(null)
+    }
   }
 
   async function send() {
@@ -168,17 +201,36 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
             )}
             <div className={viewing ? 'hidden' : undefined}>
               <DocumentSection
-                key={`${contract.id}-${contract.currentTurnPartyId}`}
+                key={`${contract.id}-${contract.currentTurnPartyId}-${docVersion}`}
                 contract={contract}
                 user={user}
                 canEdit={canSend}
                 myPartyId={myParty?.id}
                 view={view}
+                selectedChangeId={selectedChangeId}
+                onSelectChange={selectChange}
+                onSaved={() => void load()}
               />
             </div>
           </div>
         </main>
-        <Sidebar />
+        <Sidebar
+          active={sidebarTab}
+          onActiveChange={setSidebarTab}
+          changes={
+            <ChangesPanel
+              changes={changes}
+              tracking={contract.status !== 'DRAFT'}
+              myPartyId={myParty?.id}
+              myTurn={myTurn}
+              selectedId={selectedChangeId}
+              busyId={changeBusy}
+              error={changeError}
+              onSelect={setSelectedChangeId}
+              onAction={(changeId, action) => void resolveChange(changeId, action)}
+            />
+          }
+        />
       </div>
 
       <PeopleDialog

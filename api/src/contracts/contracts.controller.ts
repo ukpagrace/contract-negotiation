@@ -21,7 +21,7 @@ import { parseEmail } from '../auth/auth.controller.js';
 import { SessionGuard, type AuthenticatedRequest } from '../auth/session.guard.js';
 import type { PartyRole, Prisma } from '../generated/prisma/client.js';
 import { ContractsService, type ContractDetail, type TeamMember } from './contracts.service.js';
-import { EditorService, type LockHolder } from './editor.service.js';
+import { EditorService, type ChangeItem, type LockHolder } from './editor.service.js';
 
 const docxUpload = FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -206,5 +206,26 @@ export class ContractsController {
     @Param('number', ParseIntPipe) versionNumber: number,
   ): ReturnType<ContractsService['getVersion']> {
     return this.contracts.getVersion(request.user, id, versionNumber);
+  }
+
+  @Get('contracts/:id/changes')
+  @UseGuards(SessionGuard)
+  listChanges(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<ChangeItem[]> {
+    return this.editor.listChanges(request.user, id);
+  }
+
+  @Post('contracts/:id/changes/:changeId/:action')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  resolveChange(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Param('changeId') changeId: string,
+    @Param('action') action: string,
+  ): Promise<void> {
+    if (action !== 'accept' && action !== 'reject' && action !== 'withdraw') {
+      throw new BadRequestException('Action must be accept, reject or withdraw.');
+    }
+    return this.editor.resolve(request.user, id, changeId, action);
   }
 }

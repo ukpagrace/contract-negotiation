@@ -1,10 +1,12 @@
 import {
   BadGatewayException,
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
   Logger,
+  NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
   UnprocessableEntityException,
@@ -16,10 +18,11 @@ import { createClient } from 'redis';
 
 import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { ContractStatus, PartyRole, type Prisma, type User } from '../generated/prisma/client.js';
+import { ChangeStatus, ContractStatus, PartyRole, type Prisma, type User } from '../generated/prisma/client.js';
 import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { contractSentEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
+import { baseSignature, collectChanges, resolveChange, type ChangeKind, type DocNode } from './changes.js';
 import { ContractsService, INVITE_TTL_MS } from './contracts.service.js';
 
 const LOCK_TTL_MS = 60_000;
@@ -27,6 +30,16 @@ const LOCK_TTL_MS = 60_000;
 export interface LockHolder {
   userId: string;
   name: string;
+}
+
+export interface ChangeItem {
+  id: string;
+  type: ChangeKind;
+  text: string;
+  authorPartyId: string;
+  authorOrg: string;
+  authorName: string;
+  createdAt: Date;
 }
 
 export interface ImportedDocx {
@@ -102,8 +115,114 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
 
   async saveDraft(user: User, contractId: string, content: Prisma.InputJsonObject): Promise<void> {
     await this.assertHoldsLock(user, contractId);
-    await this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: content } });
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    const writes: Prisma.PrismaPromise<unknown>[] = [];
+
+    if (contract.status !== ContractStatus.DRAFT) {
+      const next = content as unknown as DocNode;
+      if (baseSignature(contract.draftContent as unknown as DocNode, party.id) !== baseSignature(next, party.id)) {
+        throw new BadRequestException('Only tracked changes can be saved after sending. Reload the page and try again.');
+      }
+
+      const found = collectChanges(next);
+      const rows = await this.prisma.change.findMany({ where: { contractId } });
+      const rowsById = new Map(rows.map((row) => [row.id, row]));
+      for (const [id, change] of found) {
+        const row = rowsById.get(id);
+        if (change.authorPartyId !== party.id) continue;
+        if (row && (row.authorPartyId !== party.id || row.status !== ChangeStatus.PENDING)) {
+          throw new BadRequestException('A change in this document is invalid. Reload the page and try again.');
+        }
+        if (!row) {
+          writes.push(
+            this.prisma.change.create({
+              data: { id, contractId, type: change.type, authorPartyId: party.id, authorUserId: user.id },
+            }),
+          );
+        }
+      }
+      // Own pending changes no longer in the document were undone while editing.
+      const withdrawn = rows.filter((row) => row.authorPartyId === party.id && row.status === ChangeStatus.PENDING && !found.has(row.id));
+      if (withdrawn.length > 0) {
+        writes.push(this.prisma.change.deleteMany({ where: { id: { in: withdrawn.map((row) => row.id) } } }));
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: content } }),
+      ...writes,
+    ]);
     await this.redis.del(this.lockKey(contractId));
+  }
+
+  async listChanges(user: User, contractId: string): Promise<ChangeItem[]> {
+    const contract = await this.contracts.get(user, contractId);
+    const found = collectChanges(contract.draftContent as unknown as DocNode | null);
+    const rows = await this.prisma.change.findMany({
+      where: { contractId, id: { in: [...found.keys()] }, status: ChangeStatus.PENDING },
+      include: { authorUser: true, authorParty: true },
+    });
+    const rowsById = new Map(rows.map((row) => [row.id, row]));
+    return [...found].flatMap(([id, change]) => {
+      const row = rowsById.get(id);
+      if (!row) return [];
+      return [{
+        id,
+        type: change.type,
+        text: change.text,
+        authorPartyId: row.authorPartyId,
+        authorOrg: row.authorParty.orgName,
+        authorName: row.authorUser.name ?? row.authorUser.email,
+        createdAt: row.createdAt,
+      }];
+    });
+  }
+
+  // accept/reject resolve the other side's change; withdraw undoes one of your own.
+  async resolve(user: User, contractId: string, changeId: string, action: 'accept' | 'reject' | 'withdraw'): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    if (contract.currentTurnPartyId !== party.id) {
+      throw new ForbiddenException('You can resolve changes on your turn.');
+    }
+    const holderId = await this.redis.get(this.lockKey(contractId));
+    if (holderId) {
+      throw new ConflictException(
+        holderId === user.id ? 'Save or cancel your edits first.' : `${(await this.holder(holderId)).name} is editing. Try again when they save.`,
+      );
+    }
+    const change = await this.prisma.change.findFirst({ where: { id: changeId, contractId } });
+    if (!change) {
+      throw new NotFoundException('Change not found.');
+    }
+    const own = change.authorPartyId === party.id;
+    if (own !== (action === 'withdraw')) {
+      throw new ForbiddenException(own ? "You can't accept or reject your own changes." : 'You can only withdraw your own changes.');
+    }
+
+    const next = resolveChange(contract.draftContent as unknown as DocNode, changeId, action === 'accept');
+    await this.prisma.$transaction(async (tx) => {
+      const where = { id: changeId, status: ChangeStatus.PENDING };
+      const updated =
+        action === 'withdraw'
+          ? await tx.change.deleteMany({ where })
+          : await tx.change.updateMany({
+              where,
+              data: {
+                status: action === 'accept' ? ChangeStatus.ACCEPTED : ChangeStatus.REJECTED,
+                resolvedByUserId: user.id,
+                resolvedAt: new Date(),
+              },
+            });
+      if (updated.count === 0) {
+        throw new ConflictException('This change has already been resolved.');
+      }
+      await tx.contract.update({ where: { id: contractId }, data: { draftContent: next as unknown as Prisma.InputJsonObject } });
+      await tx.activityLog.create({
+        data: { contractId, actorUserId: user.id, type: `CHANGE_${action.toUpperCase()}`, payload: { changeId } },
+      });
+    });
   }
 
   async replaceWithUpload(

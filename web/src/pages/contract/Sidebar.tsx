@@ -1,17 +1,21 @@
-import { useState } from 'react'
+import type { ReactNode } from 'react'
 
 const tabs = ['Changes', 'Comments', 'Chat', 'AI'] as const
-type Tab = (typeof tabs)[number]
+export type Tab = (typeof tabs)[number]
 
-const emptyStates: Record<Tab, string> = {
-  Changes: 'No changes yet. Edits are tracked once the contract has been sent.',
+const emptyStates: Record<Exclude<Tab, 'Changes'>, string> = {
   Comments: 'No comments yet. Select text in the document to start a thread.',
   Chat: 'No messages yet. Chat with your team or with both sides about the whole contract.',
   AI: 'Ask questions about the document or get a plain-language summary of the changes.',
 }
 
-export function Sidebar() {
-  const [active, setActive] = useState<Tab>('Changes')
+interface SidebarProps {
+  active: Tab
+  onActiveChange: (tab: Tab) => void
+  changes: ReactNode
+}
+
+export function Sidebar({ active, onActiveChange, changes }: SidebarProps) {
 
   return (
     <aside className="flex min-h-80 flex-col border-t border-rule bg-paper lg:sticky lg:top-0 lg:h-svh lg:border-t-0 lg:border-l">
@@ -21,7 +25,7 @@ export function Sidebar() {
             key={tab}
             role="tab"
             aria-selected={active === tab}
-            onClick={() => setActive(tab)}
+            onClick={() => onActiveChange(tab)}
             className={`-mb-px border-b-2 px-3 py-3 text-sm ${
               active === tab ? 'border-action font-medium text-ink' : 'border-transparent text-ink-muted hover:text-ink'
             }`}
@@ -31,7 +35,7 @@ export function Sidebar() {
         ))}
       </div>
       <div role="tabpanel" aria-label={active} className="flex-1 overflow-y-auto p-5">
-        <p className="text-sm leading-relaxed text-ink-muted">{emptyStates[active]}</p>
+        {active === 'Changes' ? changes : <p className="text-sm leading-relaxed text-ink-muted">{emptyStates[active]}</p>}
       </div>
     </aside>
   )

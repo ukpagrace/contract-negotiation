@@ -36,6 +36,16 @@ export interface VersionSummary {
   sentByParty: { orgName: string }
 }
 
+export interface ChangeItem {
+  id: string
+  type: 'INSERT' | 'DELETE'
+  text: string
+  authorPartyId: string
+  authorOrg: string
+  authorName: string
+  createdAt: string
+}
+
 export interface LockHolder {
   userId: string
   name: string
