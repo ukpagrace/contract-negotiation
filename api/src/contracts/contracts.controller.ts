@@ -208,6 +208,17 @@ export class ContractsController {
     return this.contracts.getVersion(request.user, id, versionNumber);
   }
 
+  @Post('contracts/:id/versions/:number/restore')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  restoreVersion(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Param('number', ParseIntPipe) versionNumber: number,
+  ): Promise<void> {
+    return this.editor.restoreVersion(request.user, id, versionNumber);
+  }
+
   @Get('contracts/:id/changes')
   @UseGuards(SessionGuard)
   listChanges(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<ChangeItem[]> {

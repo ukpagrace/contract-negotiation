@@ -48,6 +48,8 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   const [sendOpen, setSendOpen] = useState(false)
   const [sendError, setSendError] = useState('')
   const [sending, setSending] = useState(false)
+  const [restoreOpen, setRestoreOpen] = useState(false)
+  const [restoreError, setRestoreError] = useState('')
   const [changes, setChanges] = useState<ChangeItem[]>([])
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null)
   const [sidebarTab, setSidebarTab] = useState<Tab>('Changes')
@@ -165,6 +167,20 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
     }
   }
 
+  async function restore() {
+    if (!viewing) return
+    setRestoreError('')
+    try {
+      await api(`/contracts/${id}/versions/${viewing.versionNumber}/restore`, { method: 'POST' })
+      setRestoreOpen(false)
+      setViewing(null)
+      await load()
+      setDocVersion((v) => v + 1)
+    } catch (err) {
+      setRestoreError((err as Error).message)
+    }
+  }
+
   async function send() {
     setSending(true)
     setSendError('')
@@ -249,7 +265,20 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                   <span className="text-sm text-ink">
                     Viewing version {viewing.versionNumber}, sent by {viewing.sentByParty.orgName} on {formatDate(viewing.sentAt)}
                   </span>
-                  <Button variant="outline" onClick={() => setViewing(null)}>Back to current</Button>
+                  <div className="flex gap-2">
+                    {canSend && (
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setRestoreError('')
+                          setRestoreOpen(true)
+                        }}
+                      >
+                        Restore this version
+                      </Button>
+                    )}
+                    <Button variant="outline" onClick={() => setViewing(null)}>Back to current</Button>
+                  </div>
                 </div>
                 <div className={`px-6 sm:px-12 ${view === 'theirs' ? 'redline-theirs' : ''}`}>
                   <SimpleEditor key={viewing.versionNumber} content={viewing.content} editable={false} />
@@ -327,6 +356,18 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
         onOpenChange={setPeopleOpen}
         onChanged={load}
       />
+
+      <Modal title={`Restore version ${viewing?.versionNumber}?`} open={restoreOpen} onOpenChange={setRestoreOpen}>
+        <p className="text-sm leading-relaxed text-ink-muted">
+          The draft goes back to this version's text, with the changes it proposed applied. Differences from the current text show
+          as your tracked changes, replacing any your side has made since it was sent to you.
+        </p>
+        {restoreError && <p className="mt-4 text-sm text-destructive">{restoreError}</p>}
+        <div className="mt-8 flex gap-2">
+          <Button size="lg" onClick={() => void restore()}>Restore</Button>
+          <Button size="lg" variant="outline" onClick={() => setRestoreOpen(false)}>Cancel</Button>
+        </div>
+      </Modal>
 
       <Modal title={`Send to ${otherParty?.orgName}?`} open={sendOpen} onOpenChange={setSendOpen}>
         <p className="text-sm leading-relaxed text-ink-muted">

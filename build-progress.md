@@ -1,6 +1,6 @@
 # Contract Negotiation Platform: Build Progress
 
-30 September 2026. **Phases 1–6 complete. Phases 7–9 remaining.**
+30 September 2026. **Phases 1–7 complete. Phases 8–9 remaining.**
 
 1. [Summary](#1-summary)
 2. [Decisions log](#2-decisions-log)
@@ -23,7 +23,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 4 | Send, turns, versions, history | Done |
 | 5 | Tracked changes, accept/reject, server checks | Done (as 5a + 5b) |
 | 6 | Comments, chat, live updates | Done |
-| 7 | Upload diffing, version restore | Not started |
+| 7 | Upload diffing, version restore | Done |
 | 8 | AI questions and explanations | Not started |
 | 9 | Ready to sign, e-signature, export | Not started |
 
@@ -67,6 +67,8 @@ Every question raised during the build and the answer given, in order.
 | 20 | Phase 6 | Who can resolve a comment thread? | Anyone who can see it: either side for Shared, only the owning side for Internal. Shows who resolved it and when; anyone who can see it can reopen. |
 | 21 | Spec | Add decisions 19–20 to the spec .docx? | Done (§8.1 and data model). |
 | 22 | Phase 6 | How are text comments anchored? (Spec's comment mark in the document would reveal internal comments to the other side, and be wiped when the other side saves.) | Stored separately: quoted text + a little context either side; the page finds and highlights it; not found → Outdated. Spec updated. |
+| 23 | Phase 6 | Comment while editing? Delete from reading mode? | Reading: highlight shows **Comment \| Edit** on your turn (Edit keeps the highlight so Delete works), **Comment \| Alice is editing** if a teammate edits, **Comment** only otherwise. Editing: no popup; **Comment** in the toolbar + Ctrl/Cmd+Alt+M; only saved text ("Save your edits first…" otherwise). |
+| 24 | Phase 7 | Similarity threshold for "same paragraph, edited"? | 50% of words shared, to be tuned on real contracts. |
 
 ### Technical choices made along the way
 
@@ -77,7 +79,8 @@ Every question raised during the build and the answer given, in order.
 | Sending while someone edits | Blocked ("Save or cancel your edits" / "Carol is editing. Ask them to save first."). |
 | Where accept/reject happens | On the server, directly on the saved document data (no shared editor code between web and API). |
 | Checking saves after first send | Saved doc must equal the previous one once the saver's own pending changes are undone. Formatting and paragraph breaks allowed; anything else refused. |
-| Upload after first send | Blocked until Phase 7. |
+| Upload after first send | Compared with the agreed text: the current draft with the uploader's own pending changes undone. (The spec says "last sent version", but that still holds the other side's since-resolved marks.) Blocked while the other side has unresolved changes. Replaces the uploader's earlier pending changes. |
+| Restore | Takes the version as it read with its proposed changes applied, then works like an upload. Your turn only, nobody editing, other side's changes resolved first. Logged as VERSION_RESTORED; restoredFromVersionId not set yet. |
 | Upload before first send | Replaces the draft. On "Start a contract" the name comes from the document if left blank. |
 | Word tracked changes/comments in uploads | Insertions kept, deletions dropped; comments dropped with a notice. |
 | Routing & packages | Few lines of routing in `App.tsx`, no router package. New packages only where needed: Prisma, pg adapter, @nestjs/config, redis, AWS S3 client, python-docx. |
@@ -184,21 +187,22 @@ Every question raised during the build and the answer given, in order.
 - **Live updates (SSE):** `GET /contracts/:id/events`, one stream per viewer filtered to their side. Turn, document, lock, people, comments and chat update without reload. Replaced the 10 s lock and 15 s turn polling. A take-over now kicks the editor immediately.
 - **API:** `threads`, `threads/:id/comments`, `PATCH threads/:id` (status), `comments/:id` (PATCH/DELETE), `chat`, `chat/:id` (PATCH/DELETE). Migration `comments_chat` (anchor fields, resolvedBy/At, editedAt, deletedAt).
 
+- **Follow-ups:** reading-mode popup **Comment | Edit** / **Comment | Alice is editing**; Comment button + Ctrl/Cmd+Alt+M while editing (saved text only); bigger Internal/Shared switch with "Only your team will see this."; toolbar scroll arrows; document width 896px.
+
 **Checked:** unit test for the shared text format; API tests (visibility, per-side events, leak guard, edit/delete/resolve rules, withdraw keeps thread); two-user browser test (26 checks, no page errors).
+
+### Phase 7: Upload diffing and restore
+- **Upload after first send** (while editing): the Word file is compared with the agreed text and the differences become your tracked changes, word by word inside edited paragraphs. Notice: "Uploaded. Differences from the current text are shown as your tracked changes."
+- **How it compares** (`diffDocs` in `api/src/contracts/changes.ts`, spec §4): identical paragraphs matched with jsdiff `diffArrays` (quotes and spacing ignored); leftovers paired at ≥50% shared words; paired ones compared with `diffWordsWithSpace`; unpaired = added/removed. New formatting kept untracked. Removed paragraphs shown before whatever replaced them.
+- **Blocked** while the other side has unresolved changes ("Accept or reject the other side's changes first.").
+- **Restore:** History → a version → **Restore this version** (your turn only) → confirm. Differences from the agreed text become your tracked changes.
+- New package: `diff` (jsdiff 9), as named in the spec.
+
+**Checked:** 12 new unit tests (all spec §4.5 examples plus quotes, end removals, mixed formatting); API tests with real .docx uploads (redlines, re-upload, blocks, turn/lock rules, restore both ways, 404); browser test of upload and restore.
 
 ---
 
 ## 4. Remaining phases
-
-### Phase 7: Upload diffing and restore
-**To do:**
-- Upload after first send becomes the uploader's tracked changes vs the last sent version (spec §4): match identical paragraphs (jsdiff `diffArrays`), pair leftovers by shared words (start at 50%), `diffWords` inside modified paragraphs, convert to marks.
-- Upload blocked while the other side has unresolved changes.
-- v1 limits: formatting-only changes not tracked; moved paragraphs = removed + added; heavy rewrites = full delete + insert.
-- **Restore a version** (from Phase 4): only on your turn; difference from last sent version appears as your redlines.
-
-**Open questions:**
-- Tune the 50% similarity threshold on real contracts.
 
 ### Phase 8: AI
 **To do:**
@@ -228,6 +232,7 @@ Every question raised during the build and the answer given, in order.
 - Live updates are in memory, so they assume a single API process (move to Redis pub/sub if scaled out).
 - A lock that expires from inactivity sends no event; teammates re-check every 30 s while someone else holds it.
 - New comments/messages don't send emails.
+- Upload comparison v1 limits: formatting-only changes untracked; moved paragraph = removed + added; heavy rewrite = full delete + insert; a removed list item or table row shows as a struck-out paragraph next to its neighbour.
 - Heavy edits right around commented text can mark its thread Outdated sooner.
 - Web has 21 existing TypeScript errors in older prototype files (table toolbar, tracked-change popover) + a deprecated `baseUrl` setting; new code has none.
 - Editor toolbar still has buttons contracts don't need (code block, task list, highlight); trimming suggested, not done.

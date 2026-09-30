@@ -18,11 +18,11 @@ import { createClient } from 'redis';
 
 import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { ChangeStatus, ContractStatus, PartyRole, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
+import { ChangeStatus, ContractStatus, PartyRole, type Contract, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
 import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { contractSentEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
-import { baseSignature, collectChanges, resolveChange, type ChangeKind, type DocNode } from './changes.js';
+import { baseSignature, collectChanges, diffDocs, resolveChange, settleChanges, type ChangeKind, type DocNode } from './changes.js';
 import { ContractsService, INVITE_TTL_MS } from './contracts.service.js';
 import { EventsService } from './events.service.js';
 
@@ -123,7 +123,23 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     await this.assertHoldsLock(user, contractId);
     const party = await this.contracts.partyOf(user, contractId);
     const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
-    const writes: Prisma.PrismaPromise<unknown>[] = [];
+    await this.writeDraft(user, party, contract, content);
+    await this.redis.del(this.lockKey(contractId));
+    this.events.publish(contractId, 'document', party.id);
+    this.events.publish(contractId, 'lock', party.id);
+  }
+
+  // Checks the new draft only adds or drops the saver's own tracked changes, keeps the Change
+  // rows in step, and writes it along with `extra`.
+  private async writeDraft(
+    user: User,
+    party: ContractParty,
+    contract: Contract,
+    content: Prisma.InputJsonObject,
+    extra: Prisma.PrismaPromise<unknown>[] = [],
+  ): Promise<void> {
+    const contractId = contract.id;
+    const writes: Prisma.PrismaPromise<unknown>[] = [...extra];
 
     if (contract.status !== ContractStatus.DRAFT) {
       const next = content as unknown as DocNode;
@@ -159,9 +175,6 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: content } }),
       ...writes,
     ]);
-    await this.redis.del(this.lockKey(contractId));
-    this.events.publish(contractId, 'document', party.id);
-    this.events.publish(contractId, 'lock', party.id);
   }
 
   async listChanges(user: User, contractId: string): Promise<ChangeItem[]> {
@@ -240,17 +253,65 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     file: Buffer,
   ): Promise<{ content: Prisma.InputJsonObject; commentsDropped: boolean }> {
     await this.assertHoldsLock(user, contractId);
-    // After the first send an upload must be diffed into tracked changes, which comes later.
-    const { status } = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
-    if (status !== ContractStatus.DRAFT) {
-      throw new ForbiddenException('Uploading a new version after sending is not available yet.');
-    }
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    if (contract.status !== ContractStatus.DRAFT) this.assertNoTheirChanges(contract, party);
     const imported = await this.importDocx(file);
-    await this.prisma.$transaction([
-      this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: imported.content } }),
-      this.prisma.uploadedFile.create({ data: { contractId, s3Key: imported.s3Key, uploadedById: user.id } }),
+    const stored = this.prisma.uploadedFile.create({ data: { contractId, s3Key: imported.s3Key, uploadedById: user.id } });
+
+    if (contract.status === ContractStatus.DRAFT) {
+      await this.prisma.$transaction([
+        this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: imported.content } }),
+        stored,
+      ]);
+      return { content: imported.content, commentsDropped: imported.commentsDropped };
+    }
+    const content = await this.proposeAsChanges(user, party, contract, imported.content as unknown as DocNode, [stored]);
+    return { content, commentsDropped: imported.commentsDropped };
+  }
+
+  // Restoring puts the version's text (as it read with its proposed changes applied) back as
+  // this side's tracked changes; the next send makes it a new version.
+  async restoreVersion(user: User, contractId: string, versionNumber: number): Promise<void> {
+    const party = await this.assertCanEdit(user, contractId);
+    const holderId = await this.redis.get(this.lockKey(contractId));
+    if (holderId) {
+      throw new ConflictException(
+        holderId === user.id ? 'Save or cancel your edits first.' : `${(await this.holder(holderId)).name} is editing. Try again when they save.`,
+      );
+    }
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    this.assertNoTheirChanges(contract, party);
+    const version = await this.prisma.contractVersion.findUnique({ where: { contractId_versionNumber: { contractId, versionNumber } } });
+    if (!version) {
+      throw new NotFoundException('Version not found.');
+    }
+    const restored = settleChanges(version.content as unknown as DocNode, () => 'accept');
+    await this.proposeAsChanges(user, party, contract, restored, [
+      this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'VERSION_RESTORED', payload: { versionNumber } } }),
     ]);
-    return { content: imported.content, commentsDropped: imported.commentsDropped };
+    this.events.publish(contractId, 'document', party.id);
+  }
+
+  // Replaces this side's pending changes with the differences between the agreed text and `next`.
+  private async proposeAsChanges(
+    user: User,
+    party: ContractParty,
+    contract: Contract,
+    next: DocNode,
+    extra: Prisma.PrismaPromise<unknown>[],
+  ): Promise<Prisma.InputJsonObject> {
+    const agreed = settleChanges(contract.draftContent as unknown as DocNode, (_kind, author) => (author === party.id ? 'reject' : null));
+    const content = diffDocs(agreed, next, party.id, randomUUID) as unknown as Prisma.InputJsonObject;
+    await this.writeDraft(user, party, contract, content, extra);
+    return content;
+  }
+
+  private assertNoTheirChanges(contract: Contract, party: ContractParty): void {
+    const theirs = [...collectChanges(contract.draftContent as unknown as DocNode).values()].some((c) => c.authorPartyId !== party.id);
+    if (theirs) {
+      throw new ConflictException("Accept or reject the other side's changes first.");
+    }
   }
 
   async send(user: User, contractId: string): Promise<void> {

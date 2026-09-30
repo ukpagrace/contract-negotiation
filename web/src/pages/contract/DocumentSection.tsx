@@ -172,7 +172,9 @@ export function DocumentSection(props: DocumentSectionProps) {
       latest.current = result.content
       setSaved(result.content)
       setVersion((v) => v + 1)
-      setNotice(result.commentsDropped ? "Document replaced. Comments in the uploaded file weren't imported." : 'Document replaced.')
+      const done = tracking ? 'Uploaded. Differences from the current text are shown as your tracked changes.' : 'Document replaced.'
+      setNotice(result.commentsDropped ? `${done} Comments in the uploaded file weren't imported.` : done)
+      onSaved()
     })
   }
 
@@ -199,9 +201,7 @@ export function DocumentSection(props: DocumentSectionProps) {
           {editing ? (
             <>
               <input ref={fileInput} type="file" accept=".docx" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-              {!tracking && (
-                <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
-              )}
+              <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
               <Button variant="outline" disabled={busy} onClick={cancel}>Cancel</Button>
               <Button disabled={busy} onClick={save}>Save</Button>
             </>
