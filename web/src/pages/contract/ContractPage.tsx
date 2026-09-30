@@ -6,11 +6,9 @@ import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
 import { api, type ContractDetail, type User, type VersionSummary } from '@/lib/api'
 import { StatusBadge } from '../Contracts'
-import { DocumentSection } from './DocumentSection'
+import { DocumentSection, ViewStyles, type ViewMode } from './DocumentSection'
 import { Modal, PeopleDialog } from './PeopleDialog'
 import { Sidebar } from './Sidebar'
-
-export type ViewMode = 'both' | 'theirs'
 
 const viewLabels: Record<ViewMode, string> = {
   both: "Both sides' changes",
@@ -101,6 +99,7 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
 
   return (
     <div className="flex flex-1 flex-col">
+      {myParty && <ViewStyles partyId={myParty.id} />}
       <header className="flex flex-wrap items-center justify-between gap-4 border-y border-rule bg-paper px-6 py-4">
         <div className="min-w-0">
           <h2 className="m-0 truncate font-serif text-2xl font-medium text-ink">{contract.title}</h2>
@@ -162,7 +161,7 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                   </span>
                   <Button variant="outline" onClick={() => setViewing(null)}>Back to current</Button>
                 </div>
-                <div className="px-6 sm:px-12">
+                <div className={`px-6 sm:px-12 ${view === 'theirs' ? 'redline-theirs' : ''}`}>
                   <SimpleEditor key={viewing.versionNumber} content={viewing.content} editable={false} />
                 </div>
               </section>
@@ -172,7 +171,9 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                 key={`${contract.id}-${contract.currentTurnPartyId}`}
                 contract={contract}
                 user={user}
-                canEdit={contract.status === 'DRAFT' && contract.currentTurnPartyId === myParty?.id}
+                canEdit={canSend}
+                myPartyId={myParty?.id}
+                view={view}
               />
             </div>
           </div>

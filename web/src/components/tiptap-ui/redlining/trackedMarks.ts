@@ -1,56 +1,41 @@
 import { Mark, mergeAttributes } from '@tiptap/core'
 
-// 1. Insertion Mark (Green Text)
+// Shared by both marks. Not inclusive, so text typed at the edge of someone else's
+// change doesn't silently become part of it.
+const changeAttributes = () => ({
+  changeId: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute('data-change-id') },
+  authorPartyId: { default: null, parseHTML: (el: HTMLElement) => el.getAttribute('data-author-party') },
+})
+
+const render = (flag: string, title: string) =>
+  ({ HTMLAttributes }: { HTMLAttributes: Record<string, string | null> }) =>
+    [
+      'span',
+      mergeAttributes({
+        [flag]: '',
+        'data-change-id': HTMLAttributes.changeId,
+        'data-author-party': HTMLAttributes.authorPartyId,
+        title,
+      }),
+      0,
+    ] as const
+
 export const TrackedInsertion = Mark.create({
   name: 'trackedInsertion',
-
-  // Defines metadata attached to each edit
-  addAttributes() {
-    return {
-      author: { default: 'Anonymous' },
-    }
-  },
-
-  // Tells Tiptap how to read this from saved HTML
+  inclusive: false,
+  addAttributes: changeAttributes,
   parseHTML() {
     return [{ tag: 'span[data-tracked-insertion]' }]
   },
-
-  // Tells Tiptap how to render this to the DOM
-  renderHTML({ HTMLAttributes }) {
-    return [
-      'span',
-      mergeAttributes(HTMLAttributes, {
-        'data-tracked-insertion': '',
-        'data-author': HTMLAttributes.author || 'Anonymous',
-      }),
-      0, // 0 represents the text content nested inside this span
-    ]
-  },
+  renderHTML: render('data-tracked-insertion', 'Added, pending'),
 })
 
-// 2. Deletion Mark (Red Strikethrough Text)
 export const TrackedDeletion = Mark.create({
   name: 'trackedDeletion',
-
-  addAttributes() {
-    return {
-      author: { default: 'Anonymous' },
-    }
-  },
-
+  inclusive: false,
+  addAttributes: changeAttributes,
   parseHTML() {
     return [{ tag: 'span[data-tracked-deletion]' }]
   },
-
-  renderHTML({ HTMLAttributes }) {
-    return [
-      'span',
-      mergeAttributes(HTMLAttributes, {
-        'data-tracked-deletion': '',
-        'data-author': HTMLAttributes.author || 'Anonymous',
-      }),
-      0,
-    ]
-  },
+  renderHTML: render('data-tracked-deletion', 'Removed, pending'),
 })

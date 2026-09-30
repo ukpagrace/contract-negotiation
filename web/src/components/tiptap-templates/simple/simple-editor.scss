@@ -196,3 +196,14 @@ body {
     padding: 1rem 0 3rem;
   }
 }
+
+/* Tracked changes */
+.tiptap span[data-tracked-insertion] {
+  color: var(--color-insert);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.tiptap span[data-tracked-deletion] {
+  color: var(--color-delete);
+  text-decoration: line-through;
+}

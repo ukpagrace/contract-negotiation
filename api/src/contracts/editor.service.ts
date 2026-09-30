@@ -112,6 +112,11 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     file: Buffer,
   ): Promise<{ content: Prisma.InputJsonObject; commentsDropped: boolean }> {
     await this.assertHoldsLock(user, contractId);
+    // After the first send an upload must be diffed into tracked changes, which comes later.
+    const { status } = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    if (status !== ContractStatus.DRAFT) {
+      throw new ForbiddenException('Uploading a new version after sending is not available yet.');
+    }
     const imported = await this.importDocx(file);
     await this.prisma.$transaction([
       this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: imported.content } }),
@@ -221,9 +226,8 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     if (contract.currentTurnPartyId !== party.id) {
       throw new ForbiddenException("It's the other side's turn. You can edit once they send it back.");
     }
-    // Edits after the first send must be tracked changes, which aren't built yet.
-    if (contract.status !== ContractStatus.DRAFT) {
-      throw new ForbiddenException('This contract can only be edited as a draft for now.');
+    if (contract.status === ContractStatus.READY_TO_SIGN || contract.status === ContractStatus.SIGNED) {
+      throw new ForbiddenException('This contract can no longer be edited.');
     }
   }
 

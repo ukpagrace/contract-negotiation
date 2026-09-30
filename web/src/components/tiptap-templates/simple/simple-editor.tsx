@@ -92,7 +92,6 @@ import { TableToolbarControls } from "@/components/tiptap-ui/table-button"
 // import type { ListStylePreset } from "@/components/tiptap-ui/list-style/list-style"
 import { RedlineExtension } from "@/components/tiptap-ui/redlining/redlineExtension"
 
-import { TrackedDeletion, TrackedInsertion } from "@/components/tiptap-ui/redlining/trackedMarks"
 import { type ViewMode } from "@/components/tiptap-ui/redlining/RedlineToolbar"
 // import BubbleMenu from "@tiptap/extension-bubble-menu"
 
@@ -237,9 +236,11 @@ interface SimpleEditorProps {
   content: JSONContent
   editable: boolean
   onChange?: (content: JSONContent) => void
+  // Set once the contract has been sent: edits become tracked changes attributed to this side.
+  trackAsPartyId?: string
 }
 
-export function SimpleEditor({ content, editable, onChange }: SimpleEditorProps) {
+export function SimpleEditor({ content, editable, onChange, trackAsPartyId }: SimpleEditorProps) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
   const [mobileView, setMobileView] = useState<"main" | "highlighter" | "link">(
@@ -270,12 +271,9 @@ export function SimpleEditor({ content, editable, onChange }: SimpleEditorProps)
           enableClickSelection: true,
         },
       }),
-      TrackedInsertion,
-      TrackedDeletion,
-      // Tracking starts after the first send; drafts are edited plainly.
       RedlineExtension.configure({
-        enabled: false,
-        author: "mark doe"
+        enabled: Boolean(trackAsPartyId),
+        partyId: trackAsPartyId ?? "",
       }),
       TextStyle,
       Color, 

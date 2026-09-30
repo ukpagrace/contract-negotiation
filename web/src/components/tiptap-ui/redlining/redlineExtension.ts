@@ -1,157 +1,117 @@
 import { Extension } from '@tiptap/core'
-import { Plugin, PluginKey } from '@tiptap/pm/state'
-import { TrackedInsertion, TrackedDeletion } from './trackedMarks'
+import { Fragment, Slice, type Mark, type MarkType, type Node as PMNode } from '@tiptap/pm/model'
+import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state'
+import { Mapping, ReplaceStep } from '@tiptap/pm/transform'
+import { TrackedDeletion, TrackedInsertion } from './trackedMarks'
 
 export interface RedlineOptions {
   enabled: boolean
-  author: string
+  partyId: string
+}
+
+// Transactions carrying this meta are not tracked (our own fix-ups, and later accept/reject).
+export const SKIP_TRACKING = 'redlineSkip'
+
+function ownChangeId(node: PMNode | null | undefined, type: MarkType, partyId: string): string | null {
+  const mark = node?.marks.find((m: Mark) => m.type === type && m.attrs.authorPartyId === partyId)
+  return mark ? (mark.attrs.changeId as string) : null
 }
 
 export const RedlineExtension = Extension.create<RedlineOptions>({
   name: 'redlineExtension',
 
   addOptions() {
-    return {
-      enabled: true,
-      author: 'User_1',
-    }
+    return { enabled: false, partyId: '' }
   },
 
-  // Register the marks we created in Step 1
   addExtensions() {
     return [TrackedInsertion, TrackedDeletion]
   },
 
-  // Transaction Interceptor: Automatically tag newly typed text as Insertion
   addProseMirrorPlugins() {
-    const extension = this
+    const { enabled, partyId } = this.options
+    let lastKey = ''
 
     return [
       new Plugin({
-        key: new PluginKey('redlineAutoInsert'),
-        appendTransaction(transactions, oldState, newState) {
-          if (!extension.options.enabled) return null
+        key: new PluginKey('redline'),
+        props: {
+          handleKeyDown(_view, event) {
+            lastKey = event.key
+            return false
+          },
+        },
+        // Every edit is rewritten after the fact: deleted text is put back with a deletion mark
+        // (unless it was our own pending insertion) and inserted text gets an insertion mark.
+        appendTransaction(transactions, _oldState, newState) {
+          if (!enabled) return null
+          const ins = newState.schema.marks.trackedInsertion
+          const del = newState.schema.marks.trackedDeletion
 
-          let tr = newState.tr
-          let modified = false
-
-          transactions.forEach((transaction) => {
-            // Ignore non-document changes or remote updates
-            if (!transaction.docChanged || transaction.getMeta('history$')) return
-
-            transaction.steps.forEach((step) => {
-              // Inspect range where new text was added
-              step.getMap().forEach((oldStart, oldEnd, newStart, newEnd) => {
-                if (newEnd > newStart) {
-                  // Apply insertion mark over newly inserted range
-                  tr.addMark(
-                    newStart,
-                    newEnd,
-                    newState.schema.marks.trackedInsertion.create({
-                      author: extension.options.author,
-                    })
-                  )
-                  modified = true
-                }
-              })
+          const all = new Mapping()
+          const replaced: { step: ReplaceStep; doc: PMNode; index: number }[] = []
+          for (const transaction of transactions) {
+            const track = transaction.docChanged && !transaction.getMeta(SKIP_TRACKING) && !transaction.getMeta('history$')
+            transaction.steps.forEach((step, i) => {
+              if (track && step instanceof ReplaceStep) {
+                replaced.push({ step, doc: transaction.docs[i], index: all.maps.length })
+              }
+              all.appendMap(transaction.mapping.maps[i])
             })
-          })
+          }
+          if (replaced.length === 0) return null
 
-          return modified ? tr : null
+          const tr = newState.tr
+          for (const { step, doc, index } of replaced) {
+            const after = all.slice(index + 1)
+            const pos = tr.mapping.map(after.map(step.from, -1), -1)
+            const end = tr.mapping.map(after.map(step.from + step.slice.size, 1), 1)
+
+            const $pos = tr.doc.resolve(pos)
+            const deletionId =
+              ownChangeId($pos.nodeBefore, del, partyId) ?? ownChangeId($pos.nodeAfter, del, partyId) ?? crypto.randomUUID()
+            const deletionMark = del.create({ changeId: deletionId, authorPartyId: partyId })
+
+            const restore = (fragment: Fragment): Fragment => {
+              const nodes: PMNode[] = []
+              fragment.forEach((node) => {
+                if (!node.isText) nodes.push(node.copy(restore(node.content)))
+                else if (ownChangeId(node, ins, partyId)) return
+                else if (del.isInSet(node.marks)) nodes.push(node)
+                else nodes.push(node.mark(deletionMark.addToSet(node.marks)))
+              })
+              return Fragment.fromArray(nodes)
+            }
+
+            let restoredSize = 0
+            if (step.to > step.from) {
+              const deleted = doc.slice(step.from, step.to)
+              const sizeBefore = tr.doc.content.size
+              tr.replace(pos, pos, new Slice(restore(deleted.content), deleted.openStart, deleted.openEnd))
+              restoredSize = tr.doc.content.size - sizeBefore
+            }
+
+            const insStart = pos + restoredSize
+            const insEnd = end + restoredSize
+            if (insEnd > insStart) {
+              tr.removeMark(insStart, insEnd, ins).removeMark(insStart, insEnd, del)
+              const insertionId =
+                ownChangeId(tr.doc.resolve(insStart).nodeBefore, ins, partyId) ??
+                ownChangeId(tr.doc.resolve(insEnd).nodeAfter, ins, partyId) ??
+                crypto.randomUUID()
+              tr.addMark(insStart, insEnd, ins.create({ changeId: insertionId, authorPartyId: partyId }))
+            }
+
+            // Backspace should step over the text it just marked, so the next press reaches the previous character.
+            // The key is used rather than the old selection, which can lag behind a click.
+            if (restoredSize > 0 && lastKey === 'Backspace' && step.slice.size === 0 && replaced.length === 1) {
+              tr.setSelection(TextSelection.create(tr.doc, pos))
+            }
+          }
+
+          return tr.docChanged ? tr.setMeta(SKIP_TRACKING, true) : null
         },
       }),
     ]
-  },
-
-  // Keyboard Interceptor: Re-route Backspace to mark text as Deleted
-//   addKeyboardShortcuts() {
-//     return {
-//       Backspace: ({ editor }) => {
-//         // If redlining is disabled, let default Backspace happen
-//         if (!this.options.enabled) return false
-
-//         const { empty, from, to } = editor.state.selection
-
-//         // Determine range to mark: selected text OR single previous character
-//         const deleteFrom = empty ? Math.max(0, from - 1) : from
-//         const deleteTo = to
-
-//         if (deleteFrom === deleteTo) return false
-
-//         // Apply deletion mark across the target range
-//         editor
-//           .chain()
-//           .focus()
-//           .setTextSelection({ from: deleteFrom, to: deleteTo })
-//           .setMark('trackedDeletion', { author: this.options.author })
-//           .setTextSelection(deleteTo) // Move cursor past the marked deletion
-//           .run()
-
-//         return true // Stop default browser deletion
-//       },
-//     }
-//   },
-
-addKeyboardShortcuts() {
-    return {
-      Backspace: ({ editor }) => {
-        if (!this.options.enabled) return false
-
-        const { empty, $from, from, to } = editor.state.selection
-
-        let deleteFrom = from
-        let deleteTo = to
-
-        if (empty) {
-          // If at the very start of a block, fallback to default block deletion/merge
-          if ($from.parentOffset === 0) {
-            return false
-          }
-          deleteFrom = Math.max(0, from - 1)
-        }
-
-        if (deleteFrom === deleteTo) return false
-
-        const insertionMarkType = editor.schema.marks.trackedInsertion
-        const deletionMarkType = editor.schema.marks.trackedDeletion
-
-        // 1. Check if the target text was newly typed in this session (has trackedInsertion mark)
-        const isNewlyInserted = editor.state.doc.rangeHasMark(
-          deleteFrom,
-          deleteTo,
-          insertionMarkType
-        )
-
-        if (isNewlyInserted) {
-          // ACTUALLY DELETE IT: User is just backspacing their own typo while typing
-          editor.chain().focus().deleteRange({ from: deleteFrom, to: deleteTo }).run()
-          return true
-        }
-
-        // 2. Check if it's ALREADY marked as deleted
-        const isAlreadyDeleted = editor.state.doc.rangeHasMark(
-          deleteFrom,
-          deleteTo,
-          deletionMarkType
-        )
-
-        if (isAlreadyDeleted) {
-          // Jump cursor past already deleted text
-          editor.commands.setTextSelection(deleteFrom)
-          return true
-        }
-
-        // 3. Otherwise, mark existing text as DELETED (red strikethrough)
-        editor
-          .chain()
-          .focus()
-          .setTextSelection({ from: deleteFrom, to: deleteTo })
-          .setMark('trackedDeletion', { author: this.options.author })
-          .setTextSelection(deleteFrom)
-          .run()
-
-        return true
-      },
-    }
   },
 })

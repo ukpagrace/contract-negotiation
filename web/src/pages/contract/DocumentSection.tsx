@@ -8,7 +8,33 @@ const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] }
 const HEARTBEAT_MS = 20_000
 const IDLE_MS = 60_000
 
-export function DocumentSection({ contract, user, canEdit }: { contract: ContractDetail; user: User; canEdit: boolean }) {
+export type ViewMode = 'both' | 'theirs'
+
+// Only rules for the viewer's own changes differ between views, and those depend on their side's id.
+export function ViewStyles({ partyId }: { partyId: string }) {
+  const own = (flag: string) => `.redline-theirs span[${flag}][data-author-party="${partyId}"]`
+  return (
+    <style>{`
+      ${own('data-tracked-insertion')} { color: inherit; text-decoration: underline dotted var(--color-ink-muted); }
+      ${own('data-tracked-deletion')} { font-size: 0; }
+      ${own('data-tracked-deletion')}::before {
+        content: ''; display: inline-block; width: 2px; height: 1.1rem; margin: 0 1px;
+        background: var(--color-delete); vertical-align: text-bottom;
+      }
+    `}</style>
+  )
+}
+
+interface DocumentSectionProps {
+  contract: ContractDetail
+  user: User
+  canEdit: boolean
+  myPartyId: string | undefined
+  view: ViewMode
+}
+
+export function DocumentSection({ contract, user, canEdit, myPartyId, view }: DocumentSectionProps) {
+  const tracking = contract.status !== 'DRAFT'
   const id = contract.id
   const [saved, setSaved] = useState<JSONContent>(contract.draftContent ?? EMPTY_DOC)
   const [version, setVersion] = useState(0)
@@ -117,13 +143,15 @@ export function DocumentSection({ contract, user, canEdit }: { contract: Contrac
     <section className="sheet">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-6 py-4 sm:px-12">
         <span className="text-sm text-ink-muted">
-          {editing ? 'Editing. Save to share with your team.' : lockedByOther ? `${lock.name} is editing` : contract.draftContent ? 'Document' : ''}
+          {editing ? (tracking ? 'Editing. Your changes are tracked.' : 'Editing. Save to share with your team.') : lockedByOther ? `${lock.name} is editing` : contract.draftContent ? 'Document' : ''}
         </span>
         <div className="flex gap-2">
           {editing ? (
             <>
               <input ref={fileInput} type="file" accept=".docx" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-              <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
+              {!tracking && (
+                <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
+              )}
               <Button variant="outline" disabled={busy} onClick={cancel}>Cancel</Button>
               <Button disabled={busy} onClick={save}>Save</Button>
             </>
@@ -136,12 +164,13 @@ export function DocumentSection({ contract, user, canEdit }: { contract: Contrac
       </div>
       {notice && <p className="border-b border-rule bg-muted px-6 py-3 text-sm text-ink sm:px-12">{notice}</p>}
       {error && <p className="border-b border-rule px-6 py-3 text-sm text-destructive sm:px-12">{error}</p>}
-      <div className="px-6 sm:px-12">
+      <div className={`px-6 sm:px-12 ${view === 'theirs' ? 'redline-theirs' : ''}`}>
         {contract.draftContent ? (
           <SimpleEditor
             key={version}
             content={latest.current}
             editable={editing}
+            trackAsPartyId={tracking ? myPartyId : undefined}
             onChange={(content) => {
               latest.current = content
               lastActivity.current = Date.now()
