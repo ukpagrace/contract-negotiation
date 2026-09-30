@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { EditorContent, EditorContext, useEditor, type JSONContent } from "@tiptap/react"
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { EditorContent, EditorContext, useEditor, useEditorState, type JSONContent } from "@tiptap/react"
 
 // --- Tiptap Core Extensions ---
 import { StarterKit } from "@tiptap/starter-kit"
@@ -33,6 +33,7 @@ import {
 import {
   BubbleMenu, // <--- Add this line here!
 } from '@tiptap/react/menus'
+import { ChevronLeft, ChevronRight } from "lucide-react"
 
 // --- Tiptap Node ---
 import { ImageUploadNode } from "@/components/tiptap-node/image-upload-node/image-upload-node-extension"
@@ -122,6 +123,8 @@ const MainToolbarContent = ({
   isSearchAndReplaceOpen,
   searchAndReplaceButtonRef,
   isMobile,
+  onComment,
+  canComment,
 }: {
   onHighlighterClick: () => void
   onLinkClick: () => void
@@ -129,12 +132,31 @@ const MainToolbarContent = ({
   isSearchAndReplaceOpen: boolean
   searchAndReplaceButtonRef: React.RefObject<HTMLButtonElement | null>
   isMobile: boolean
+  onComment?: () => void
+  canComment: boolean
 }) => {
 
   // const { editor } = useTiptapEditor()
   return (
     <>
       <Spacer />
+
+      {onComment && (
+        <ToolbarGroup>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={!canComment}
+            onClick={onComment}
+            tooltip="Comment on selected text"
+            shortcutKeys="mod+alt+m"
+          >
+            Comment
+          </Button>
+        </ToolbarGroup>
+      )}
+
+      {onComment && <ToolbarSeparator />}
 
       <ToolbarGroup>
         <UndoRedoButton action="undo" />
@@ -248,11 +270,14 @@ interface SimpleEditorProps {
   // Comment threads to highlight; onAnchorsFound reports which ones were found in the text.
   anchors?: AnchoredThread[]
   onAnchorsFound?: (threadIds: string[]) => void
-  // When set, selecting text while reading shows a Comment button.
+  // When set, comments can be started from selected text: a popup while reading, the toolbar
+  // or Ctrl/Cmd+Alt+M while editing.
   onComment?: (anchor: Anchor) => void
+  // Shown in the reading popup after Comment.
+  readingAction?: ReactNode
 }
 
-export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anchors, onAnchorsFound, onComment }: SimpleEditorProps) {
+export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anchors, onAnchorsFound, onComment, readingAction }: SimpleEditorProps) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
   const [mobileView, setMobileView] = useState<"main" | "highlighter" | "link">(
@@ -266,6 +291,7 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
   // The editor is created once, so it calls the latest callback through a ref.
   const onAnchorsFoundRef = useRef(onAnchorsFound)
   onAnchorsFoundRef.current = onAnchorsFound
+  const commentRef = useRef<() => void>(() => undefined)
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -290,7 +316,10 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
         enabled: Boolean(trackAsPartyId),
         partyId: trackAsPartyId ?? "",
       }),
-      CommentAnchors.configure({ onFound: (ids) => onAnchorsFoundRef.current?.(ids) }),
+      CommentAnchors.configure({
+        onFound: (ids) => onAnchorsFoundRef.current?.(ids),
+        onShortcut: () => commentRef.current(),
+      }),
       TextStyle,
       Color, 
       Table.configure({ resizable: true }),
@@ -327,7 +356,35 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
 
   useEffect(() => {
     editor?.setEditable(editable)
+    // Keeps whatever was selected while reading, so Edit from the popup can go straight to Delete.
+    if (editable) editor?.commands.focus()
   }, [editor, editable])
+
+  // The toolbar scrolls sideways with a hidden scrollbar, so show which sides have more buttons.
+  const [overflow, setOverflow] = useState({ left: false, right: false })
+  useEffect(() => {
+    const bar = toolbarRef.current
+    if (!editable || !bar) return
+    const update = () =>
+      setOverflow({ left: bar.scrollLeft > 1, right: bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1 })
+    update()
+    bar.addEventListener("scroll", update)
+    const observer = new ResizeObserver(update)
+    observer.observe(bar)
+    return () => {
+      bar.removeEventListener("scroll", update)
+      observer.disconnect()
+    }
+  }, [editable, mobileView])
+
+  const hasSelection = useEditorState({ editor, selector: ({ editor }) => Boolean(editor && !editor.state.selection.empty) }) ?? false
+
+  commentRef.current = () => {
+    if (!editor || !onComment) return
+    const anchor = anchorFromSelection(editor.state)
+    editor.commands.setTextSelection(editor.state.selection.to)
+    if (anchor) onComment(anchor)
+  }
 
   useEffect(() => {
     if (editor && anchors) editor.view.dispatch(editor.state.tr.setMeta(commentAnchorsKey, anchors))
@@ -377,6 +434,16 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
               : {}),
           }}
         >
+          {overflow.left && (
+            <div
+              aria-hidden
+              className="toolbar-scroll-hint"
+              data-side="left"
+              onClick={() => toolbarRef.current?.scrollBy({ left: -240, behavior: "smooth" })}
+            >
+              <ChevronLeft size={18} />
+            </div>
+          )}
           {mobileView === "main" ? (
             <MainToolbarContent
               onHighlighterClick={() => setMobileView("highlighter")}
@@ -385,12 +452,24 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
               isSearchAndReplaceOpen={isSearchAndReplaceOpen}
               searchAndReplaceButtonRef={searchAndReplaceButtonRef}
               isMobile={isMobile}
+              onComment={onComment && (() => commentRef.current())}
+              canComment={hasSelection}
             />
           ) : (
             <MobileToolbarContent
               type={mobileView === "highlighter" ? "highlighter" : "link"}
               onBack={() => setMobileView("main")}
             />
+          )}
+          {overflow.right && (
+            <div
+              aria-hidden
+              className="toolbar-scroll-hint"
+              data-side="right"
+              onClick={() => toolbarRef.current?.scrollBy({ left: 240, behavior: "smooth" })}
+            >
+              <ChevronRight size={18} />
+            </div>
           )}
         </Toolbar>}
 
@@ -404,19 +483,11 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
 
         {editor && onComment && !editable && (
           <BubbleMenu editor={editor} shouldShow={({ state }) => !state.selection.empty}>
-            <button
-              type="button"
-              className="comment-bubble"
-              // Keeps the text selected while clicking.
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => {
-                const anchor = anchorFromSelection(editor.state)
-                editor.commands.setTextSelection(editor.state.selection.to)
-                if (anchor) onComment(anchor)
-              }}
-            >
-              Comment
-            </button>
+            {/* preventDefault keeps the text selected while clicking. */}
+            <div className="comment-bubble" onMouseDown={(event) => event.preventDefault()}>
+              <button type="button" onClick={() => commentRef.current()}>Comment</button>
+              {readingAction}
+            </div>
           </BubbleMenu>
         )}
 

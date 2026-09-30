@@ -242,7 +242,7 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
 
       <div className="grid flex-1 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <main className="min-w-0 px-4 py-8 sm:px-8">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto max-w-4xl">
             {viewing && (
               <section className="sheet">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule bg-muted px-6 py-4 sm:px-12">

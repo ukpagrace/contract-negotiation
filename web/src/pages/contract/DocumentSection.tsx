@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
 import { Button } from '@/components/ui/button'
-import type { AnchoredThread } from '@/components/tiptap-ui/redlining/commentAnchors'
+import { plainTextOf, type AnchoredThread } from '@/components/tiptap-ui/redlining/commentAnchors'
 import { api, type Anchor, type ContractDetail, type LockHolder, type User } from '@/lib/api'
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] }
@@ -141,6 +141,23 @@ export function DocumentSection(props: DocumentSectionProps) {
     })
   }
 
+  // While editing, only text that's already saved can be commented on; the server checks the same.
+  function comment(anchor: Anchor) {
+    if (editing) {
+      const savedText = plainTextOf(saved)
+      if (!savedText.includes(anchor.quote)) {
+        setError('Save your edits first, then comment on the new text.')
+        return
+      }
+      // The words around it may be unsaved edits; leave them out.
+      if (!savedText.includes(anchor.prefix + anchor.quote + anchor.suffix)) {
+        anchor = { quote: anchor.quote, prefix: '', suffix: '' }
+      }
+    }
+    setError('')
+    props.onComment(anchor)
+  }
+
   function cancel() {
     latest.current = saved
     setVersion((v) => v + 1)
@@ -206,7 +223,14 @@ export function DocumentSection(props: DocumentSectionProps) {
             trackAsPartyId={tracking ? myPartyId : undefined}
             anchors={props.anchors}
             onAnchorsFound={props.onAnchorsFound}
-            onComment={props.onComment}
+            onComment={comment}
+            readingAction={
+              !canEdit ? undefined : lockedByOther ? (
+                <span className="comment-bubble-muted">{lock.name} is editing</span>
+              ) : (
+                <button type="button" onClick={() => startEditing(false)}>Edit</button>
+              )
+            }
             onChange={(content) => {
               latest.current = content
               lastActivity.current = Date.now()

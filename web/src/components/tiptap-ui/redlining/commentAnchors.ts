@@ -1,4 +1,5 @@
 import { Extension } from '@tiptap/core'
+import type { JSONContent } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey, type EditorState } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
@@ -36,6 +37,14 @@ function flatten(doc: PMNode): Flat {
   }
   doc.forEach((child, offset) => walk(child, offset))
   return flat
+}
+
+// The same text for a stored document, e.g. the last saved version while someone is editing.
+export function plainTextOf(node: JSONContent): string {
+  if (node.type === 'text') return node.text ?? ''
+  if (node.type === 'hardBreak') return '\n'
+  const inner = (node.content ?? []).map(plainTextOf).join('')
+  return node.type === 'doc' ? inner : `${inner}\n`
 }
 
 export function anchorFromSelection(state: EditorState): Anchor | null {
@@ -100,6 +109,8 @@ function build(doc: PMNode, threads: AnchoredThread[]): AnchorState {
 export interface CommentAnchorsOptions {
   // Called with the ids of threads whose text is still in the document; the rest are outdated.
   onFound: (threadIds: string[]) => void
+  // Ctrl/Cmd+Alt+M with text selected, as in Word and Google Docs.
+  onShortcut: () => void
 }
 
 // Threads are handed in with a transaction meta: tr.setMeta(commentAnchorsKey, threads).
@@ -107,7 +118,17 @@ export const CommentAnchors = Extension.create<CommentAnchorsOptions>({
   name: 'commentAnchors',
 
   addOptions() {
-    return { onFound: () => undefined }
+    return { onFound: () => undefined, onShortcut: () => undefined }
+  },
+
+  addKeyboardShortcuts() {
+    return {
+      'Mod-Alt-m': () => {
+        if (this.editor.state.selection.empty) return false
+        this.options.onShortcut()
+        return true
+      },
+    }
   },
 
   addProseMirrorPlugins() {
