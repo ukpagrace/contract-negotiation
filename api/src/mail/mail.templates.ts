@@ -50,3 +50,22 @@ export function inviteEmail(
     ),
   };
 }
+
+export function contractSentEmail(to: string, senderOrg: string, contractTitle: string, link: string): OutboundEmail {
+  const text =
+    `${senderOrg} sent you "${contractTitle}". It's your turn to review it.\n\n` +
+    `Open it here: ${link}\n\n` +
+    'You will be sent a short code to confirm your email address.';
+  return {
+    to,
+    subject: `${senderOrg} sent you ${contractTitle}`,
+    text,
+    html: wrap(
+      `${escapeHtml(senderOrg)} sent you a contract`,
+      `<p style="margin:0 0 14px"><strong>${escapeHtml(contractTitle)}</strong></p>` +
+        "<p style=\"margin:0 0 14px\">It's your turn to review it.</p>" +
+        `<p style="margin:0 0 14px"><a href="${link}">Open the contract</a></p>` +
+        '<p style="margin:0;color:#555">You will be sent a short code to confirm your email address.</p>',
+    ),
+  };
+}

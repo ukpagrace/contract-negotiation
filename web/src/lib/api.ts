@@ -30,6 +30,12 @@ export interface ContractDetail {
   }[]
 }
 
+export interface VersionSummary {
+  versionNumber: number
+  sentAt: string
+  sentByParty: { orgName: string }
+}
+
 export interface LockHolder {
   userId: string
   name: string

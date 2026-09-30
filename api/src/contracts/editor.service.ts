@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -10,13 +11,16 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 
+import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { ContractStatus, type Prisma, type User } from '../generated/prisma/client.js';
+import { ContractStatus, PartyRole, type Prisma, type User } from '../generated/prisma/client.js';
+import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
+import { contractSentEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
-import { ContractsService } from './contracts.service.js';
+import { ContractsService, INVITE_TTL_MS } from './contracts.service.js';
 
 const LOCK_TTL_MS = 60_000;
 
@@ -43,6 +47,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly contracts: ContractsService,
     private readonly config: ConfigService<AppConfig, true>,
+    @Inject(MAIL_PROVIDER) private readonly mail: MailProvider,
   ) {
     this.redis = createClient({ url: config.get('redisUrl', { infer: true }) });
     const r2 = config.get('r2', { infer: true });
@@ -113,6 +118,73 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       this.prisma.uploadedFile.create({ data: { contractId, s3Key: imported.s3Key, uploadedById: user.id } }),
     ]);
     return { content: imported.content, commentsDropped: imported.commentsDropped };
+  }
+
+  async send(user: User, contractId: string): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId }, include: { parties: true } });
+    if (contract.currentTurnPartyId !== party.id) {
+      throw new ForbiddenException("It's the other side's turn.");
+    }
+    if (contract.status === ContractStatus.READY_TO_SIGN || contract.status === ContractStatus.SIGNED) {
+      throw new ConflictException('This contract can no longer be sent.');
+    }
+    const holderId = await this.redis.get(this.lockKey(contractId));
+    if (holderId) {
+      throw new ConflictException(
+        holderId === user.id
+          ? 'Save or cancel your edits before sending.'
+          : `${(await this.holder(holderId)).name} is editing. Ask them to save first.`,
+      );
+    }
+
+    const receiver = contract.parties.find((p) => p.id !== party.id)!;
+    await this.prisma.$transaction(async (tx) => {
+      // Conditional update so two simultaneous sends can't both succeed.
+      const switched = await tx.contract.updateMany({
+        where: { id: contractId, currentTurnPartyId: party.id },
+        data: {
+          currentTurnPartyId: receiver.id,
+          status: receiver.role === PartyRole.PROPOSER ? ContractStatus.WITH_PROPOSER : ContractStatus.WITH_COUNTERPARTY,
+        },
+      });
+      if (switched.count === 0) {
+        throw new ConflictException('This contract was just sent.');
+      }
+      const last = await tx.contractVersion.findFirst({ where: { contractId }, orderBy: { versionNumber: 'desc' } });
+      const versionNumber = (last?.versionNumber ?? 0) + 1;
+      await tx.contractVersion.create({
+        data: { contractId, versionNumber, content: contract.draftContent as Prisma.InputJsonValue, sentByPartyId: party.id },
+      });
+      await tx.activityLog.create({
+        data: { contractId, actorUserId: user.id, type: 'SENT', payload: { versionNumber } },
+      });
+    });
+
+    const appUrl = this.config.get('appUrl', { infer: true });
+    const recipients: { email: string; link: string }[] = [];
+    const participants = await this.prisma.participant.findMany({ where: { partyId: receiver.id }, include: { user: true } });
+    for (const participant of participants) {
+      recipients.push({ email: participant.user.email, link: `${appUrl}/contracts/${contractId}` });
+    }
+    // People who haven't joined yet get a fresh link that signs them in and adds them to this side.
+    const pending = await this.prisma.invite.findMany({ where: { partyId: receiver.id, acceptedAt: null } });
+    for (const invite of pending) {
+      const token = randomBytes(32).toString('base64url');
+      await this.prisma.invite.update({
+        where: { id: invite.id },
+        data: { tokenHash: hashToken(token), expiresAt: new Date(Date.now() + INVITE_TTL_MS) },
+      });
+      recipients.push({ email: invite.email, link: `${appUrl}/invite/${token}` });
+    }
+    for (const recipient of recipients) {
+      // The send is already committed; a failed email shouldn't report the send as failed.
+      try {
+        await this.mail.send(contractSentEmail(recipient.email, party.orgName, contract.title, recipient.link));
+      } catch (err) {
+        this.logger.error(`Send email to ${recipient.email} failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   async importDocx(file: Buffer): Promise<ImportedDocx> {

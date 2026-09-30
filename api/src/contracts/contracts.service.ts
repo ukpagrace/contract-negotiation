@@ -9,7 +9,7 @@ import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { inviteEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
 
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface TeamMember {
   email: string;
@@ -97,7 +97,10 @@ export class ContractsService {
             expiresAt: new Date(Date.now() + INVITE_TTL_MS),
           },
         });
-        invites.push({ email: target.email, token });
+        // The counterparty is only emailed when the contract is first sent; its link is issued then.
+        if (target.partyId === proposer.id) {
+          invites.push({ email: target.email, token });
+        }
       }
 
       return tx.contract.findUniqueOrThrow({ where: { id: created.id }, include: contractDetail });
@@ -129,6 +132,30 @@ export class ContractsService {
       contract.draftContent = lastSent?.content ?? null;
     }
     return contract;
+  }
+
+  async listVersions(
+    user: User,
+    contractId: string,
+  ): Promise<{ versionNumber: number; sentAt: Date; sentByParty: { orgName: string } }[]> {
+    await this.partyOf(user, contractId);
+    return this.prisma.contractVersion.findMany({
+      where: { contractId },
+      select: { versionNumber: true, sentAt: true, sentByParty: { select: { orgName: true } } },
+      orderBy: { versionNumber: 'desc' },
+    });
+  }
+
+  async getVersion(user: User, contractId: string, versionNumber: number): Promise<{ versionNumber: number; content: Prisma.JsonValue }> {
+    await this.partyOf(user, contractId);
+    const version = await this.prisma.contractVersion.findUnique({
+      where: { contractId_versionNumber: { contractId, versionNumber } },
+      select: { versionNumber: true, content: true },
+    });
+    if (!version) {
+      throw new NotFoundException('Version not found.');
+    }
+    return version;
   }
 
   async inviteTeammate(user: User, contractId: string, member: TeamMember): Promise<void> {

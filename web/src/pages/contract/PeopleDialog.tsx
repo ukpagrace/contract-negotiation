@@ -6,7 +6,7 @@ import { inputClass } from '../Login'
 
 type Party = ContractDetail['parties'][number]
 
-function Modal({ title, open, onOpenChange, children }: { title: string; open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
+export function Modal({ title, open, onOpenChange, children }: { title: string; open: boolean; onOpenChange: (open: boolean) => void; children: ReactNode }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -25,7 +25,7 @@ function Modal({ title, open, onOpenChange, children }: { title: string; open: b
   )
 }
 
-function PartyList({ party, user, heading }: { party: Party; user: User; heading: string }) {
+function PartyList({ party, user, heading, pendingLabel }: { party: Party; user: User; heading: string; pendingLabel: string }) {
   return (
     <section>
       <h3 className="text-sm text-ink-muted">{heading}</h3>
@@ -40,7 +40,7 @@ function PartyList({ party, user, heading }: { party: Party; user: User; heading
         {party.invites.map((invite) => (
           <li key={invite.id} className="flex items-center justify-between gap-3 text-ink-muted">
             <span className="truncate">{invite.email}</span>
-            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs">Invited</span>
+            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs">{pendingLabel}</span>
           </li>
         ))}
       </ul>
@@ -84,8 +84,15 @@ export function PeopleDialog({ contract, user, myParty, open, onOpenChange, onCh
     <>
       <Modal title="People" open={open} onOpenChange={onOpenChange}>
         <div className="space-y-8">
-          {myParty && <PartyList party={myParty} user={user} heading="Your side" />}
-          {otherParty && <PartyList party={otherParty} user={user} heading="Other side" />}
+          {myParty && <PartyList party={myParty} user={user} heading="Your side" pendingLabel="Invited" />}
+          {otherParty && (
+            <PartyList
+              party={otherParty}
+              user={user}
+              heading="Other side"
+              pendingLabel={contract.status === 'DRAFT' ? 'Gets it when you send' : 'Invited'}
+            />
+          )}
         </div>
 
         {myParty?.role === 'COUNTERPARTY' && (

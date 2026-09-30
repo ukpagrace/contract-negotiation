@@ -6,6 +6,7 @@ import {
   Get,
   HttpCode,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Put,
@@ -182,5 +183,28 @@ export class ContractsController {
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<{ content: Prisma.InputJsonObject; commentsDropped: boolean }> {
     return this.editor.replaceWithUpload(request.user, id, parseDocx(file));
+  }
+
+  @Post('contracts/:id/send')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  send(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<void> {
+    return this.editor.send(request.user, id);
+  }
+
+  @Get('contracts/:id/versions')
+  @UseGuards(SessionGuard)
+  listVersions(@Req() request: AuthenticatedRequest, @Param('id') id: string): ReturnType<ContractsService['listVersions']> {
+    return this.contracts.listVersions(request.user, id);
+  }
+
+  @Get('contracts/:id/versions/:number')
+  @UseGuards(SessionGuard)
+  getVersion(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Param('number', ParseIntPipe) versionNumber: number,
+  ): ReturnType<ContractsService['getVersion']> {
+    return this.contracts.getVersion(request.user, id, versionNumber);
   }
 }
