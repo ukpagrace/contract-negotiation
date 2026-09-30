@@ -270,8 +270,8 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     return { content, commentsDropped: imported.commentsDropped };
   }
 
-  // Restoring puts the version's text (as it read with its proposed changes applied) back as
-  // this side's tracked changes; the next send makes it a new version.
+  // Restoring brings back what this side was proposing in that version (the other side's
+  // proposals in it are undone), as this side's tracked changes; the next send makes it a new version.
   async restoreVersion(user: User, contractId: string, versionNumber: number): Promise<void> {
     const party = await this.assertCanEdit(user, contractId);
     const holderId = await this.redis.get(this.lockKey(contractId));
@@ -286,7 +286,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     if (!version) {
       throw new NotFoundException('Version not found.');
     }
-    const restored = settleChanges(version.content as unknown as DocNode, () => 'accept');
+    const restored = settleChanges(version.content as unknown as DocNode, (_kind, author) => (author === party.id ? 'accept' : 'reject'));
     await this.proposeAsChanges(user, party, contract, restored, [
       this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'VERSION_RESTORED', payload: { versionNumber } } }),
     ]);

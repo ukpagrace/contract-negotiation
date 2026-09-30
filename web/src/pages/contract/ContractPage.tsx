@@ -359,8 +359,9 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
 
       <Modal title={`Restore version ${viewing?.versionNumber}?`} open={restoreOpen} onOpenChange={setRestoreOpen}>
         <p className="text-sm leading-relaxed text-ink-muted">
-          The draft goes back to this version's text, with the changes it proposed applied. Differences from the current text show
-          as your tracked changes, replacing any your side has made since it was sent to you.
+          The draft goes back to this version's text, keeping what your side was proposing in it and leaving out the other side's
+          proposals. Differences from the current text show as your tracked changes, replacing any your side has made since it
+          was sent to you.
         </p>
         {restoreError && <p className="mt-4 text-sm text-destructive">{restoreError}</p>}
         <div className="mt-8 flex gap-2">

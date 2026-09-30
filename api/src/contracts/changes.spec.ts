@@ -183,3 +183,75 @@ describe('settleChanges', () => {
     expect(show(settled)).toBe('Payment within 30 days.');
   });
 });
+
+const cell = (...nodes: DocNode[]): DocNode => ({ type: 'tableCell', content: [{ type: 'paragraph', content: nodes.length ? nodes : undefined }] });
+const row = (...cells: DocNode[]): DocNode => ({ type: 'tableRow', content: cells });
+const table = (...rows: DocNode[]): DocNode => ({ type: 'doc', content: [{ type: 'table', content: rows }] });
+const item = (value: string): DocNode => ({ type: 'listItem', content: [{ type: 'paragraph', content: [text(value)] }] });
+const list = (...values: string[]): DocNode => ({ type: 'bulletList', content: values.map(item) });
+// Rows as "a|b" joined by " / ".
+const grid = (d: DocNode) =>
+  (d.content?.[0]?.content ?? []).map((r) => (r.content ?? []).map((c) => show({ type: 'doc', content: c.content })).join('|')).join(' / ');
+
+describe('tables when resolving', () => {
+  it('accepting a deletion of a whole row removes the row', () => {
+    const d = table(row(cell(text('Item')), cell(text('Price'))), row(cell(text('Laptop', del('d1', 'B'))), cell(text('900', del('d1', 'B')))));
+    expect(grid(resolveChange(d, 'd1', true))).toBe('Item|Price');
+  });
+
+  it('accepting part of a row leaves the cell empty', () => {
+    const d = table(row(cell(text('Item')), cell(text('Price'))), row(cell(text('Laptop', del('d1', 'B'))), cell(text('900'))));
+    expect(grid(resolveChange(d, 'd1', true))).toBe('Item|Price / |900');
+  });
+
+  it('rejecting an inserted row removes it', () => {
+    const d = table(row(cell(text('A')), cell(text('B'))), row(cell(text('New', ins('i1', 'B'))), cell(text('Row', ins('i1', 'B')))));
+    expect(grid(resolveChange(d, 'i1', false))).toBe('A|B');
+  });
+
+  it('accepting a deletion of a whole column removes the column', () => {
+    const d = table(row(cell(text('Item')), cell(text('Notes', del('d1', 'B')))), row(cell(text('Laptop')), cell(text('Bulk', del('d1', 'B')))));
+    expect(grid(resolveChange(d, 'd1', true))).toBe('Item / Laptop');
+  });
+
+  it('keeps rows and columns that were already empty', () => {
+    const d = table(row(cell(text('A')), cell()), row(cell(), cell()), row(cell(text('x', del('d1', 'B'))), cell(text('C'))));
+    expect(grid(resolveChange(d, 'd1', true))).toBe('A| / | / |C');
+  });
+
+  it('leaves tables with merged cells to empty cells only', () => {
+    const merged: DocNode = { type: 'tableCell', attrs: { colspan: 2 }, content: [{ type: 'paragraph', content: [text('Header')] }] };
+    const d = table(row(merged), row(cell(text('a')), cell(text('b', del('d1', 'B')))));
+    expect(grid(resolveChange(d, 'd1', true))).toBe('Header / a|');
+  });
+});
+
+describe('diffDocs containers', () => {
+  it('a removed list item comes back as its own bullet', () => {
+    const result = diff({ type: 'doc', content: [list('Delivery', 'Payment', 'Late fees')] }, { type: 'doc', content: [list('Delivery', 'Late fees')] });
+    const items = result.content![0].content!;
+    expect(items.map((i) => show({ type: 'doc', content: i.content }))).toEqual(['Delivery', '[-Payment]', 'Late fees']);
+  });
+
+  it('removed items at the end stay one list', () => {
+    const result = diff({ type: 'doc', content: [list('Keep', 'Gone one', 'Gone two')] }, { type: 'doc', content: [list('Keep')] });
+    expect(result.content!.map((n) => n.type)).toEqual(['bulletList', 'bulletList']);
+    expect(result.content![1].content!.length).toBe(2);
+  });
+
+  it('a removed table row comes back as its own row, and accepting it removes it', () => {
+    const before = table(row(cell(text('Item')), cell(text('Price'))), row(cell(text('Laptops')), cell(text('$900'))), row(cell(text('Monitors')), cell(text('$200'))));
+    const after = table(row(cell(text('Item')), cell(text('Price'))), row(cell(text('Monitors')), cell(text('$200'))));
+    const result = diff(before, after);
+    expect(grid(result)).toBe('Item|Price / [-Laptops]|[-$900] / Monitors|$200');
+    const id = [...collectChanges(result).keys()][0];
+    expect(grid(resolveChange(result, id, true))).toBe('Item|Price / Monitors|$200');
+  });
+});
+
+describe('restore rule', () => {
+  it("keeps the restorer's proposals and undoes the other side's", () => {
+    const d = doc([text('Pay in '), text('30', del('d1', 'A')), text('45', ins('i1', 'A')), text(' days'), text(' now', ins('i2', 'B'))]);
+    expect(show(settleChanges(d, (_k, author) => (author === 'A' ? 'accept' : 'reject')))).toBe('Pay in 45 days');
+  });
+});
