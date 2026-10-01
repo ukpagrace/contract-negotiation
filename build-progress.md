@@ -1,6 +1,6 @@
 # Contract Negotiation Platform: Build Progress
 
-1 October 2026. **Phases 1–8 and 9a complete. 9b (DocuSeal signing) remaining.**
+1 October 2026. **All phases (1–9) complete.**
 
 1. [Summary](#1-summary)
 2. [Decisions log](#2-decisions-log)
@@ -25,7 +25,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 6 | Comments, chat, live updates | Done |
 | 7 | Upload diffing, version restore | Done |
 | 8 | AI questions and explanations | Done |
-| 9 | Ready to sign, e-signature, export | 9a done (Ready, spots, signers, Reopen, export); 9b (DocuSeal) to do |
+| 9 | Ready to sign, e-signature, export | Done (as 9a + 9b) |
 
 ### Technology in use
 
@@ -34,7 +34,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | API | NestJS 12, TypeScript, Prisma 7.10, PostgreSQL 17, Redis 7 |
 | Web | React 19, Vite, Tailwind 4, TipTap 3, Radix UI |
 | Word conversion | Python 3 with python-docx (`converter/`) |
-| E-signature (planned) | DocuSeal, self-hosted |
+| E-signature | Our own (simple electronic signatures); PDFs via LibreOffice |
 | AI | Claude Sonnet 5.5 via `@anthropic-ai/sdk`, behind a swappable provider |
 | Upload comparison | jsdiff (`diff`) |
 | File storage | Cloudflare R2 (S3-compatible) |
@@ -77,7 +77,7 @@ Every question raised during the build and the answer given, in order.
 | 27 | Phase 7 | Removed list items / table rows in an upload? | Shown in their own bullet / row. Removed table columns in an upload: later (full table matching). |
 | 28 | Phase 8 | How should AI work? | AI tab: **Explain all changes** summary + **Explain** per pending change. **Ask AI**: floating button bottom-right opening a chat window. Neither stored. Claude Sonnet 5.5 behind a swappable provider; 30 AI requests per person per hour. |
 | 29 | Phase 9 | When is a contract "Ready to sign"? | ~~Automatically when the last pending change is resolved, after at least one round of changes.~~ **Replaced by 32.** |
-| 30 | Phase 9 | Which e-signature provider? | ~~Dropbox Sign.~~ **Changed:** DocuSeal, self-hosted in Docker (free, no watermark, embedded signing free, completion notice works locally). |
+| 30 | Phase 9 | Which e-signature provider? | ~~Dropbox Sign.~~ ~~DocuSeal, self-hosted.~~ **Replaced by 47.** |
 | 31 | Phase 9 | Export format? | Both: the user chooses PDF or Word. |
 | 32 | Phase 9 | How does a contract become Ready to sign? | Both sides click **Ready to sign**. Button only after the first send and with zero pending changes; any member can click for their side. Clicked side's button greys: "Waiting for Beta". "At least one round of changes" rule dropped: both can agree to an untouched version. |
 | 33 | Phase 9 | Take a click back? | **Undo ready**, until the other side has also clicked. |
@@ -85,15 +85,21 @@ Every question raised during the build and the answer given, in order.
 | 35 | Phase 9 | Email when only one side clicks Ready? | No; live updates on the page are enough. |
 | 36 | Phase 9 | Who signs? | One signer per side. Default: contract creator (proposer), onboarding email (counterparty). Any member of a side can switch its signer to another member of **that side**, until that side has signed (even if the other side already signed). Only the chosen signer sees **Sign**; others see "Waiting for Alice to sign". |
 | 37 | Phase 9 | Signer switched after the other side signed, but the text names the old signer? | Warn: "Acme has already signed. If the contract names Bob as your signer, the names won't match, and the text can't be changed now. Reopen to fix the wording." |
-| 38 | Phase 9 | How do people sign? | Inside our app: DocuSeal's signing form embedded in the contract page. DocuSeal sends no emails. |
+| 38 | Phase 9 | How do people sign? | Inside our app, on the contract page (now with our own Sign window, decision 47). |
 | 39 | Phase 9 | Where do signatures go? | Proposer decides for both when clicking Ready: **Place signature spots** (placing mode) or **Use a signature page** (we add a page at the end). |
 | 40 | Phase 9 | What is placing mode? | A mode on the contract page where the only action is placing spots: bar "Click where Acme signs" → chip → "Click where Beta signs" → Move / Done. No typing. Works on either side's turn. |
 | 41 | Phase 9 | Are spots redlines? | No. Untracked markers; only the proposer can place/move them. Counterparty sees them read-only; objects by chat, proposer moves them. If the counterparty clicked Ready first, their click stays; their window says "Acme will choose where signatures go. You'll see it before you sign." |
 | 42 | Phase 9 | What do we put on the PDF? | Spot → signature box only (name, title, date lines are the contract's own wording). Added page → "For Acme Ltd" label + signature + date filled in automatically on signing, same for Beta. No person's name on the PDF. |
-| 43 | Phase 9 | Reopen? | Allowed from both-clicked-Ready until **both** have signed; after one side signs, only the side still to sign can Reopen. Document unchanged; DocuSeal request cancelled (any signature discarded); both clicks cleared; turn goes to the reopener; spots kept; Reopened email to both ("…Acme's signature was discarded" when relevant). After fixes: both click Ready again → new PDF, new DocuSeal request, both sign again. Old PDF not stored by us; activity log notes it. |
-| 44 | Phase 9 | Build in one go or split? | Split: 9a (Ready, spots, signer, Reopen, export, emails), 9b (DocuSeal signing). |
+| 43 | Phase 9 | Reopen? | Allowed from both-clicked-Ready until **both** have signed; after one side signs, only the side still to sign can Reopen. Document unchanged; the signing round is cancelled (any signature discarded); both clicks cleared; turn goes to the reopener; spots kept; Reopened email to both ("…Acme's signature was discarded" when relevant). After fixes: both click Ready again → new document to sign, both sign again. |
+| 44 | Phase 9 | Build in one go or split? | Split: 9a (Ready, spots, signer, Reopen, export, emails), 9b (signing). |
 | 45 | Phase 9a | Can Ready be clicked while the side whose turn it is has unsent edits (e.g. accepted changes not yet sent)? | No. The latest version must be sent first, so the other side agrees to text they have actually seen. Button greyed with the reason. |
 | 46 | Phase 9a | Should a spot add text to the page? | No. In the editor it is a small ✍ icon with a "Acme signs here" flag above the line; Word/PDF exports add nothing for it. |
+| 47 | Phase 9b | DocuSeal's free self-hosted edition only creates signing documents through its API in the paid Pro edition. What now? | Build signing ourselves (simple electronic signatures; people already sign without a signing company). DocuSeal removed. A certified provider can be added later if a customer needs one. |
+| 48 | Phase 9b | How can people sign? | **Draw**, **Type** (name in a handwriting font) or **Upload** an image (PNG/JPG up to 2 MB; white paper made see-through). All become a PNG; the audit page notes the method. |
+| 49 | Phase 9b | Signer who hasn't joined yet? | Emailed a sign-in link when signing starts. |
+| 50 | Phase 9b | What stays open after Signed? | Comments and chat; only the document is locked. |
+| 51 | Phase 9b | How does a signer decline? | **Don't sign. Reopen instead** in the Sign window: the same as Reopen by that side. |
+| 52 | Phase 9b | Audit trail? | The last page of the signed PDF only ("Signing record"). |
 
 ### Technical choices made along the way
 
@@ -119,6 +125,10 @@ Every question raised during the build and the answer given, in order.
 | Spots while editing | Edits that would delete or copy a spot are refused in the editor; the server refuses saves that change spots. Uploads and restores rebuild the document without them. |
 | Ready switch | Each click is saved, then one conditional update switches to Ready to sign only if both sides are ready, so two clicks at once can't both (or neither) switch. |
 | Export | The converter turns the document into Word with python-docx; PDF via LibreOffice (`soffice`, or `SOFFICE` env). Refused while changes are pending. |
+| Signing rounds | Each Ready to sign starts a `SigningRequest` round: the document to sign is made once, stored in R2 and fingerprinted (SHA-256), so both sides sign exactly the same file. Reopen cancels the round; the next Ready makes a new one. |
+| Signature records | A `Signature` row per side per round: signer, method, image (R2), time, IP, browser, fingerprint of the document signed. Only the chosen signer can sign, once, while the round is open (conditional update, so double clicks or a Reopen at the same moment can't add a second). |
+| Signed copy | Made when the second side signs: signatures at the spots (width capped, proportions kept) or on the signature page with dates, then the Signing record page. Stored in R2; its fingerprint is saved and shown on the page. If making it fails, the signatures are kept and the page offers Try again. |
+| Signature images | Turned into a PNG in the browser (cropped to the ink); the server accepts only a PNG data URL under 1 MB. |
 
 ---
 
@@ -257,32 +267,28 @@ Decisions 31–46.
 
 **Checked:** unit tests for spot placement, offset mapping and empty paragraphs (41 in total); API scenario test (19 checks: blocks before send / with pending / unsent, placement rules, click clearing, spots proposer-only and stale-text refusal, both-ready switch + emails, blocks while ready, export, reopen + emails, signer rules, spot-removing save refused); browser test (30 checks, two users) incl. placing, moving, live updates, export download, reopen, Backspace across a spot. Re-tested on a real uploaded contract ending in a table, after fixing the "document changed" error and the label text on the page.
 
-## 4. Remaining phases
+### Phase 9b: Signing
+Decisions 47–52.
+- **Signing starts** when both sides are ready: the document to sign (clean PDF, blank spots or signature page) is made, stored and fingerprinted; a chosen signer who hasn't joined gets a sign-in email. Status line: "Waiting for Alice (Acme) to sign · Waiting for Bob (Beta) to sign".
+- **Sign window** (chosen signer only): link to the document to sign; **Draw** / **Type** / **Upload**; "I agree this is my signature and that I'm signing this contract for Acme"; **Sign**; **Don't sign. Reopen instead**. The other side sees "Acme signed" live.
+- **Both signed:** signed copy with the signatures and the Signing record page (each signer's name, email, side, time, method, IP, browser; fingerprint of the document signed; email confirmed by login code). Status **Signed**, document locked (comments/chat open), Signed email to both, **Download signed PDF** + fingerprint on the page and in Export.
+- **Reopen:** after one side has signed, only the other side can reopen; the round is cancelled and the email says the signature was discarded. Signer can be changed until that side signs (warning if the other side already has).
+- **Try again** when the document to sign or the signed copy couldn't be made, or a prompt when a side still has to choose a signer.
+- **API:** `GET /contracts/:id/signing/document`, `POST /contracts/:id/sign` (`image` PNG data URL, `method` DRAWN | TYPED | UPLOADED, `agreed`), `POST /contracts/:id/signing/retry`, `GET /contracts/:id/signed-pdf`. Reopen and signer changes go through the signing service. Contract detail adds each side's `signedAt` and the latest round. Migrations `signing` and `own_signing`.
+- **Converter:** signature images at spots / on the signature page; Signing record page.
+- **Web:** Caveat handwriting font (Google Fonts) for typed signatures.
+- **DocuSeal tried and removed:** its free edition refuses API document uploads ("available in Pro Edition").
 
-### Phase 9: Signing and export
-Decisions 31–46. 9a is done (above); the flow below is the whole phase.
-
-**Flow**
-1. **Ready to sign button:** after the first send, with zero pending changes. Either side can go first; clicked side sees "Waiting for Beta" + **Undo ready**. A saved text change clears both clicks.
-2. **Proposer's Ready click** asks: **Place signature spots** (placing mode) or **Use a signature page**. Spots are untracked, proposer-only; counterparty sees them read-only and keeps their click if they clicked first.
-3. **Both clicked** → status **Ready to sign**: editing, sending, upload, restore blocked (comments/chat still work). Clean PDF built and sent to DocuSeal. Ready to sign email to both sides.
-4. **Signing:** only each side's chosen signer sees **Sign**; DocuSeal's form opens inside our page. A side can switch its signer until it has signed (warning if the other side already signed).
-5. **Reopen:** from both-clicked until both signed (after one signature, only the unsigned side). Cancels the DocuSeal request, clears clicks, turn to reopener, Reopened email. Next round: new PDF, both sign again.
-6. **Both signed** → DocuSeal notifies our API; signed PDF stored in R2, SHA-256 hash saved, status **Signed**, contract locked, Signed email to both, **Download signed PDF**.
-7. **Export:** clean copy (no red/green), **Word** or **PDF**; refused while any change is pending ("Changes are still pending"). Spots add nothing.
-
-**9b (to do):** DocuSeal.
-- Signing PDF from the converter: spots → DocuSeal signature tags, or the added signature page ("For Acme Ltd" + signature + date).
-- `docker-compose.yml` adds DocuSeal; `api/.env`: `DOCUSEAL_URL`, `DOCUSEAL_API_KEY`, `DOCUSEAL_WEBHOOK_SECRET`. One-time: create local DocuSeal admin, copy API key.
-- Signing request from the PDF (emails off); signer swap updates the DocuSeal signer (no rebuild); Reopen cancels it.
-- API: `GET /contracts/:id/signing` (my signing link), `POST /signing/webhook` (shared secret), `GET /contracts/:id/signed-pdf`.
-- `SigningRequest`: add `signedFileKey`; status PENDING | COMPLETED | CANCELLED.
-- Web: Sign button with embedded DocuSeal form (their script tag, no npm package), "Waiting for … to sign", Signed banner + Download. Signed email to both.
-
-**Limits:** one signature per side (no initials per page); spots exist only in our editor, so a Word upload after the first send loses them (upload notice will say so); identity is email-only (login code + DocuSeal audit trail); signed PDF layout comes from our converter, may differ slightly from the original Word file.
+**Checked:** browser test (17 checks, two users): draw, upload (paper made see-through), live "Acme signed", signed side can't reopen or sign twice, bad image / unticked box refused, both signed → Signed live for both, fingerprint, signed PDF download; second contract with the signature page: type, then the other side reopens instead → signature discarded, email says so. Signed PDF checked: signatures at the spots, Signing record page. 9a browser test re-run (28 checks) and 41 unit tests pass.
 
 **Also suggested, not decided:**
 - Clearer note while editing a draft: "Draft: changes aren't tracked until you first send it".
+
+---
+
+## 4. Remaining phases
+
+None: v1 is complete. Possible next steps are in section 5.
 
 ---
 
@@ -304,6 +310,11 @@ Decisions 31–46. 9a is done (above); the flow below is the whole phase.
 - Ready to sign / Reopened emails go only to people who have joined, not to pending invites.
 - Signer dropdown lists only members who have joined; the default counterparty signer shows "(not joined yet)" until they do.
 - A text save landing at the same moment as the other side's Ready click could leave that click standing; very unlikely.
+- Signatures are simple electronic signatures: the evidence is our records (login code, IP, time, fingerprints). Contracts that legally need a certified ("qualified") signature would need a provider.
+- The IP recorded locally is `::1`; behind a proxy online, the API needs Express's `trust proxy` set to record the real address.
+- Signing needs LibreOffice too (the document to sign and the signed copy are PDFs).
+- One signature per side; no initials on every page.
+- The signed PDF's layout comes from our converter and can differ slightly from the original Word file.
 
 **Deferred by decision (build later):**
 - Accept/Reject while editing (inside the editor, saved with your edits; needs the server save check reworked).
@@ -323,7 +334,7 @@ cd api && npm run start:dev               # API on :3000
 
 cd converter && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # first time
 cd converter && .venv/bin/python app.py   # Word converter + export on :8001
-brew install --cask libreoffice           # optional: PDF export
+brew install --cask libreoffice           # PDF export and signing
 
 cd web && npm run dev                     # web on :5173, /api forwarded to the API
 ```
