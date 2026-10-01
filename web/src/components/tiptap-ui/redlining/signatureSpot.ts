@@ -3,6 +3,7 @@ import type { Editor, JSONContent } from '@tiptap/core'
 import type { Node as PMNode } from '@tiptap/pm/model'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import type { PartyRole } from '@/lib/api'
+import { SKIP_TRACKING } from './redlineExtension'
 
 // Untracked marker showing where a side signs. Only placing mode may add, move or remove one;
 // every other edit that would change them is refused.
@@ -29,7 +30,10 @@ export const SignatureSpot = Node.create<{ labels: Record<PartyRole, string> }>(
 
   renderHTML({ node }) {
     const role = node.attrs.role as PartyRole
-    return ['span', { 'data-signature-spot': role, class: 'signature-spot', contenteditable: 'false' }, `✍ ${this.options.labels[role]}`]
+    // Just an icon in the line; the label is drawn by CSS above it, so no words are added to the
+    // text. A real character inside keeps the browser's caret movement around it normal.
+    const label = this.options.labels[role]
+    return ['span', { 'data-signature-spot': role, 'data-label': label, class: 'signature-spot', contenteditable: 'false', title: label }, '✍']
   },
 
   addProseMirrorPlugins() {
@@ -55,14 +59,14 @@ export function placeSpot(editor: Editor, role: PartyRole, pos: number): boolean
   const tr = editor.state.tr
   removeFrom(tr.doc, role).forEach((at) => tr.delete(at, at + 1))
   tr.insert(tr.mapping.map(pos), editor.schema.nodes.signatureSpot.create({ role }))
-  editor.view.dispatch(tr.setMeta(PLACING, true))
+  editor.view.dispatch(tr.setMeta(PLACING, true).setMeta(SKIP_TRACKING, true))
   return true
 }
 
 export function removeSpot(editor: Editor, role: PartyRole): void {
   const tr = editor.state.tr
   removeFrom(tr.doc, role).forEach((at) => tr.delete(at, at + 1))
-  editor.view.dispatch(tr.setMeta(PLACING, true))
+  editor.view.dispatch(tr.setMeta(PLACING, true).setMeta(SKIP_TRACKING, true))
 }
 
 // Positions of `role`'s spots, last first so deleting one doesn't shift the rest.

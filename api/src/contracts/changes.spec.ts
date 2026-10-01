@@ -2,6 +2,7 @@ import {
   baseSignature,
   collectChanges,
   diffDocs,
+  mapOffset,
   placeSpots,
   plainText,
   resolveChange,
@@ -295,8 +296,21 @@ describe('signature spots', () => {
     expect(sameIgnoringSpots(placed, doc([text('Signed for Acme!')]))).toBe(false);
   });
 
+  it('leaves empty paragraphs untouched', () => {
+    const withEmpty: DocNode = { type: 'doc', content: [{ type: 'paragraph' }, ...base.content!] };
+    expect(sameIgnoringSpots(placeSpots(withEmpty, { PROPOSER: 1, COUNTERPARTY: 2 }), withEmpty)).toBe(true);
+  });
+
   it('refuses offsets past the end', () => {
     expect(() => placeSpots(base, { PROPOSER: 0, COUNTERPARTY: 999 })).toThrow();
+  });
+
+  it("maps offsets from the editor's text when it has extra line breaks", () => {
+    const stored = 'By: __\nDate: __\n';
+    const editor = 'By: __\nDate: __\n\n';
+    expect(mapOffset(editor, stored, 4)).toBe(4);
+    expect(mapOffset(editor, stored, 15)).toBe(15);
+    expect(mapOffset('A\n\nB\n', 'A\nB\n', 3)).toBe(2);
   });
 
   it('resolving changes keeps spots', () => {

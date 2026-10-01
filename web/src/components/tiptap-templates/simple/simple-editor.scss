@@ -236,25 +236,35 @@ body {
 }
 
 /* Signature spots */
+/* A small icon in the text; the flag with the side's name hangs above the line and takes no space. */
 .tiptap .signature-spot {
+  position: relative;
   display: inline-block;
-  margin: 0 2px;
-  padding: 0 0.5rem;
-  border: 1px dashed var(--color-action);
-  border-radius: 999px;
+  color: var(--color-action);
+  font-size: 0.85em;
+  user-select: none;
+}
+.tiptap .signature-spot::after {
+  content: attr(data-label);
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  z-index: 1;
+  padding: 0 0.4rem;
+  border: 1px solid var(--color-action);
+  border-radius: 3px 3px 3px 0;
+  background: var(--color-paper, #fff);
   color: var(--color-action);
   font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 0.8em;
-  line-height: 1.6;
+  font-size: 0.7rem;
+  line-height: 1.4;
   white-space: nowrap;
-  user-select: none;
 }
 .placing-spots .tiptap {
   cursor: crosshair;
 }
 .placing-spots .tiptap .signature-spot {
   cursor: pointer;
-  background: rgb(37 99 235 / 0.08);
 }
 
 /* Toolbar scroll indicators: pinned to the visible edges, overlapping the buttons beneath */

@@ -226,15 +226,13 @@ EXPORT_ALIGN = {
     "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
 }
 TEXTBLOCKS = ("paragraph", "heading", "codeBlock")
-SIGNATURE_LINE = "_" * 30
 
 
+# Signature spots only mark a position for e-signing, so they add nothing to an export.
 def add_inline(paragraph, nodes: list[dict]):
     for node in nodes:
         if node["type"] == "hardBreak":
             paragraph.add_run().add_break()
-        elif node["type"] == "signatureSpot":
-            paragraph.add_run(SIGNATURE_LINE)
         elif node["type"] == "text":
             run = paragraph.add_run(node.get("text", ""))
             marks = {mark["type"] for mark in node.get("marks", [])}

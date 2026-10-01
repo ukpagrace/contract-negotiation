@@ -1,4 +1,4 @@
-import { diffArrays, diffWordsWithSpace } from 'diff';
+import { diffArrays, diffChars, diffWordsWithSpace } from 'diff';
 
 // Pure helpers over the stored TipTap JSON. Tracked changes live in the document as
 // `trackedInsertion` / `trackedDeletion` marks carrying `changeId` and `authorPartyId`.
@@ -216,6 +216,24 @@ export function spotRoles(doc: DocNode): SpotRole[] {
   return roles;
 }
 
+// The editor adds structure the stored document can lack (e.g. an empty paragraph after a final
+// table), so its plain text can differ in line breaks. Maps an offset in `from` onto `to`.
+export function mapOffset(from: string, to: string, offset: number): number {
+  let a = 0;
+  let b = 0;
+  for (const part of diffChars(from, to)) {
+    const length = part.value.length;
+    if (part.added) {
+      b += length;
+      continue;
+    }
+    if (offset <= a + length) return part.removed ? b : b + (offset - a);
+    a += length;
+    if (!part.removed) b += length;
+  }
+  return b;
+}
+
 // Replaces any spots with ones at the given offsets. Offsets must fall inside a text block.
 export function placeSpots(doc: DocNode, offsets: Record<SpotRole, number>): DocNode {
   const pending = (Object.entries(offsets) as [SpotRole, number][]).sort((a, b) => a[1] - b[1]);
@@ -252,7 +270,8 @@ export function placeSpots(doc: DocNode, offsets: Record<SpotRole, number>): Doc
     }
     dropAt(pos);
     pos += 1;
-    return { ...node, content: out };
+    // Leave empty blocks exactly as they were, so the document still matches what was sent.
+    return out.length || node.content ? { ...node, content: out } : node;
   };
   const result = place(stripSpots(doc));
   if (pending.length) throw new Error('Spot offset is outside the text.');

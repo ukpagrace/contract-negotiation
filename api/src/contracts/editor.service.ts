@@ -36,6 +36,7 @@ import {
   baseSignature,
   collectChanges,
   diffDocs,
+  mapOffset,
   placeSpots,
   plainText,
   resolveChange,
@@ -487,12 +488,16 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     }
     const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
     const draft = contract.draftContent as unknown as DocNode;
-    if (plainText(draft) !== baseText) {
+    const text = plainText(draft);
+    if (text.replace(/\s+/g, '') !== baseText.replace(/\s+/g, '')) {
       throw new ConflictException('The document changed. Reload the page and try again.');
     }
     let placed: DocNode;
     try {
-      placed = placeSpots(draft, offsets);
+      placed = placeSpots(draft, {
+        PROPOSER: mapOffset(baseText, text, offsets.PROPOSER),
+        COUNTERPARTY: mapOffset(baseText, text, offsets.COUNTERPARTY),
+      });
     } catch {
       throw new BadRequestException('Signature spots must be placed in the text.');
     }
