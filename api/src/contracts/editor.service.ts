@@ -9,6 +9,7 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,15 +19,42 @@ import { createClient } from 'redis';
 
 import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { ChangeStatus, ContractStatus, PartyRole, type Contract, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
-import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
-import { contractSentEmail } from '../mail/mail.templates.js';
+import {
+  ChangeStatus,
+  ContractStatus,
+  PartyRole,
+  SignaturePlacement,
+  type Contract,
+  type ContractParty,
+  type Prisma,
+  type User,
+} from '../generated/prisma/client.js';
+import { MAIL_PROVIDER, type MailProvider, type OutboundEmail } from '../mail/mail.provider.js';
+import { contractSentEmail, readyToSignEmail, reopenedEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
-import { baseSignature, collectChanges, diffDocs, resolveChange, settleChanges, type ChangeKind, type DocNode } from './changes.js';
-import { ContractsService, INVITE_TTL_MS } from './contracts.service.js';
+import {
+  baseSignature,
+  collectChanges,
+  diffDocs,
+  placeSpots,
+  plainText,
+  resolveChange,
+  sameIgnoringSpots,
+  settleChanges,
+  spotRoles,
+  type ChangeKind,
+  type DocNode,
+  type SpotRole,
+} from './changes.js';
+import { ContractsService, INVITE_TTL_MS, type ContractDetail } from './contracts.service.js';
 import { EventsService } from './events.service.js';
 
 const LOCK_TTL_MS = 60_000;
+
+// Statuses in which the two sides are still negotiating (sent at least once, not yet agreed).
+const NEGOTIATING: ContractStatus[] = [ContractStatus.WITH_PROPOSER, ContractStatus.WITH_COUNTERPARTY];
+
+export type ExportFormat = 'docx' | 'pdf';
 
 export interface LockHolder {
   userId: string;
@@ -130,20 +158,30 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Checks the new draft only adds or drops the saver's own tracked changes, keeps the Change
-  // rows in step, and writes it along with `extra`.
+  // rows in step, and writes it along with `extra`. Signature spots must stay unless `spotsMayGo`
+  // (uploads and restores rebuild the document without them).
   private async writeDraft(
     user: User,
     party: ContractParty,
     contract: Contract,
     content: Prisma.InputJsonObject,
     extra: Prisma.PrismaPromise<unknown>[] = [],
+    spotsMayGo = false,
   ): Promise<void> {
     const contractId = contract.id;
     const writes: Prisma.PrismaPromise<unknown>[] = [...extra];
+    const previous = contract.draftContent as unknown as DocNode;
+    const next = content as unknown as DocNode;
+
+    if (!spotsMayGo && spotRoles(previous).join() !== spotRoles(next).join()) {
+      throw new BadRequestException("Signature spots can't be changed while editing. Reload the page and try again.");
+    }
+    // Agreeing to sign is agreeing to this text, so any change to it clears both sides' Ready.
+    const textChanged = !sameIgnoringSpots(previous, next);
+    if (textChanged) writes.push(this.clearReady(contractId));
 
     if (contract.status !== ContractStatus.DRAFT) {
-      const next = content as unknown as DocNode;
-      if (baseSignature(contract.draftContent as unknown as DocNode, party.id) !== baseSignature(next, party.id)) {
+      if (baseSignature(previous, party.id) !== baseSignature(next, party.id)) {
         throw new BadRequestException('Only tracked changes can be saved after sending. Reload the page and try again.');
       }
 
@@ -175,6 +213,11 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: content } }),
       ...writes,
     ]);
+    if (textChanged) this.events.publish(contractId, 'contract');
+  }
+
+  private clearReady(contractId: string): Prisma.PrismaPromise<unknown> {
+    return this.prisma.contractParty.updateMany({ where: { contractId }, data: { readyAt: null, readyByUserId: null } });
   }
 
   async listChanges(user: User, contractId: string): Promise<ChangeItem[]> {
@@ -240,11 +283,13 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
         throw new ConflictException('This change has already been resolved.');
       }
       await tx.contract.update({ where: { id: contractId }, data: { draftContent: next as unknown as Prisma.InputJsonObject } });
+      await tx.contractParty.updateMany({ where: { contractId }, data: { readyAt: null, readyByUserId: null } });
       await tx.activityLog.create({
         data: { contractId, actorUserId: user.id, type: `CHANGE_${action.toUpperCase()}`, payload: { changeId } },
       });
     });
     this.events.publish(contractId, 'document', party.id);
+    this.events.publish(contractId, 'contract');
   }
 
   async replaceWithUpload(
@@ -303,7 +348,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
   ): Promise<Prisma.InputJsonObject> {
     const agreed = settleChanges(contract.draftContent as unknown as DocNode, (_kind, author) => (author === party.id ? 'reject' : null));
     const content = diffDocs(agreed, next, party.id, randomUUID) as unknown as Prisma.InputJsonObject;
-    await this.writeDraft(user, party, contract, content, extra);
+    await this.writeDraft(user, party, contract, content, extra, true);
     return content;
   }
 
@@ -378,6 +423,161 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
         await this.mail.send(contractSentEmail(recipient.email, party.orgName, contract.title, recipient.link));
       } catch (err) {
         this.logger.error(`Send email to ${recipient.email} failed: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  // Ready to sign: each side confirms the text as last sent, with nothing pending. The proposer
+  // also says where signatures go. Once both have, the contract is Ready to sign.
+  async markReady(user: User, contractId: string, placement: SignaturePlacement | undefined): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.contracts.get(user, contractId);
+    this.assertAgreed(contract, party);
+    if (party.role === PartyRole.PROPOSER) {
+      if (!placement) {
+        throw new BadRequestException('Choose where signatures go.');
+      }
+      const roles = spotRoles(contract.draftContent as unknown as DocNode);
+      if (placement === SignaturePlacement.SPOTS && !(roles.includes('PROPOSER') && roles.includes('COUNTERPARTY'))) {
+        throw new BadRequestException('Place both signature spots first.');
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.contractParty.update({ where: { id: party.id }, data: { readyAt: new Date(), readyByUserId: user.id } }),
+      ...(party.role === PartyRole.PROPOSER
+        ? [this.prisma.contract.update({ where: { id: contractId }, data: { signaturePlacement: placement } })]
+        : []),
+      this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'READY', payload: { partyId: party.id } } }),
+    ]);
+    // Conditional, so when both click at once exactly one request makes the switch.
+    const switched = await this.prisma.contract.updateMany({
+      where: { id: contractId, status: { in: NEGOTIATING }, parties: { every: { readyAt: { not: null } } } },
+      data: { status: ContractStatus.READY_TO_SIGN },
+    });
+    this.events.publish(contractId, 'contract');
+    if (switched.count === 0) return;
+
+    await this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'READY_TO_SIGN', payload: {} } });
+    const link = `${this.config.get('appUrl', { infer: true })}/contracts/${contractId}`;
+    await this.emailBothSides(contractId, (email) => readyToSignEmail(email, contract.title, link));
+  }
+
+  async undoReady(user: User, contractId: string): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    if (!NEGOTIATING.includes(contract.status)) {
+      throw new ConflictException('Both sides are already ready. Reopen the contract to make changes.');
+    }
+    await this.prisma.contractParty.update({ where: { id: party.id }, data: { readyAt: null, readyByUserId: null } });
+    this.events.publish(contractId, 'contract');
+  }
+
+  // Spots are placed by the proposer, only while Ready to sign is possible, and aren't tracked
+  // changes. `baseText` is the text they were placed on, so a stale page can't misplace them.
+  async placeSignatureSpots(user: User, contractId: string, offsets: Record<SpotRole, number>, baseText: string): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    if (party.role !== PartyRole.PROPOSER) {
+      throw new ForbiddenException('Only the proposing side places signature spots.');
+    }
+    this.assertAgreed(await this.contracts.get(user, contractId), party);
+    const holderId = await this.redis.get(this.lockKey(contractId));
+    if (holderId) {
+      throw new ConflictException(`${(await this.holder(holderId)).name} is editing. Try again when they finish.`);
+    }
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    const draft = contract.draftContent as unknown as DocNode;
+    if (plainText(draft) !== baseText) {
+      throw new ConflictException('The document changed. Reload the page and try again.');
+    }
+    let placed: DocNode;
+    try {
+      placed = placeSpots(draft, offsets);
+    } catch {
+      throw new BadRequestException('Signature spots must be placed in the text.');
+    }
+    await this.prisma.$transaction([
+      this.prisma.contract.update({ where: { id: contractId }, data: { draftContent: placed as unknown as Prisma.InputJsonObject } }),
+      this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'SIGNATURE_SPOTS_PLACED', payload: {} } }),
+    ]);
+    this.events.publish(contractId, 'document');
+  }
+
+  // Back to negotiating from Ready to sign. The text doesn't change; the reopening side gets the turn.
+  async reopen(user: User, contractId: string): Promise<void> {
+    const party = await this.contracts.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    const reopened = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.contract.updateMany({
+        where: { id: contractId, status: ContractStatus.READY_TO_SIGN },
+        data: {
+          status: party.role === PartyRole.PROPOSER ? ContractStatus.WITH_PROPOSER : ContractStatus.WITH_COUNTERPARTY,
+          currentTurnPartyId: party.id,
+        },
+      });
+      if (updated.count === 0) return false;
+      await tx.contractParty.updateMany({ where: { contractId }, data: { readyAt: null, readyByUserId: null } });
+      await tx.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'REOPENED', payload: {} } });
+      return true;
+    });
+    if (!reopened) {
+      throw new ConflictException('Only a contract that is ready to sign can be reopened.');
+    }
+    this.events.publish(contractId, 'document');
+    const link = `${this.config.get('appUrl', { infer: true })}/contracts/${contractId}`;
+    await this.emailBothSides(contractId, (email) => reopenedEmail(email, party.orgName, contract.title, link));
+  }
+
+  // A clean copy of the document the user can see, with nothing pending.
+  async export(user: User, contractId: string, format: ExportFormat): Promise<{ file: Buffer; filename: string; type: string }> {
+    const contract = await this.contracts.get(user, contractId);
+    if (!contract.draftContent) {
+      throw new ConflictException("There's nothing to export until the other side sends the contract.");
+    }
+    if (collectChanges(contract.draftContent as unknown as DocNode).size > 0) {
+      throw new ConflictException('Changes are still pending. Accept or reject them before exporting.');
+    }
+    const response = await fetch(`${this.config.get('extractorUrl', { infer: true })}/export?format=${format}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: contract.draftContent, title: contract.title }),
+      signal: AbortSignal.timeout(this.config.get('extractorTimeoutMs', { infer: true })),
+    });
+    if (!response.ok) {
+      const { message } = (await response.json().catch(() => ({}))) as { message?: string };
+      throw new ServiceUnavailableException(message ?? "The file couldn't be made. Try again in a moment.");
+    }
+    const type = response.headers.get('content-type') ?? 'application/octet-stream';
+    const filename = `${contract.title.replace(/[^\w .-]+/g, '').trim() || 'contract'}.${format}`;
+    return { file: Buffer.from(await response.arrayBuffer()), filename, type };
+  }
+
+  private assertAgreed(contract: ContractDetail, party: ContractParty): void {
+    if (!NEGOTIATING.includes(contract.status)) {
+      throw new ConflictException(
+        contract.status === ContractStatus.DRAFT ? 'Send the contract first.' : 'Both sides are already ready to sign.',
+      );
+    }
+    if (contract.hasUnsentChanges) {
+      throw new ConflictException(
+        contract.currentTurnPartyId === party.id
+          ? 'Send your latest changes first, so the other side sees the final text.'
+          : "The other side has changes they haven't sent yet.",
+      );
+    }
+    if (collectChanges(contract.draftContent as unknown as DocNode).size > 0) {
+      throw new ConflictException('Changes are still pending. Every change must be accepted or rejected first.');
+    }
+  }
+
+  private async emailBothSides(contractId: string, build: (email: string) => OutboundEmail): Promise<void> {
+    const participants = await this.prisma.participant.findMany({ where: { party: { contractId } }, include: { user: true } });
+    for (const { user } of participants) {
+      // The change is already committed; a failed email shouldn't report it as failed.
+      try {
+        await this.mail.send(build(user.email));
+      } catch (err) {
+        this.logger.error(`Email to ${user.email} failed: ${(err as Error).message}`);
       }
     }
   }

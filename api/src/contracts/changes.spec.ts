@@ -1,4 +1,16 @@
-import { baseSignature, collectChanges, diffDocs, plainText, resolveChange, settleChanges, similarity, type DocNode } from './changes.js';
+import {
+  baseSignature,
+  collectChanges,
+  diffDocs,
+  placeSpots,
+  plainText,
+  resolveChange,
+  sameIgnoringSpots,
+  settleChanges,
+  similarity,
+  spotRoles,
+  type DocNode,
+} from './changes.js';
 
 const ins = (changeId: string, authorPartyId: string) => ({ type: 'trackedInsertion', attrs: { changeId, authorPartyId } });
 const del = (changeId: string, authorPartyId: string) => ({ type: 'trackedDeletion', attrs: { changeId, authorPartyId } });
@@ -253,5 +265,42 @@ describe('restore rule', () => {
   it("keeps the restorer's proposals and undoes the other side's", () => {
     const d = doc([text('Pay in '), text('30', del('d1', 'A')), text('45', ins('i1', 'A')), text(' days'), text(' now', ins('i2', 'B'))]);
     expect(show(settleChanges(d, (_k, author) => (author === 'A' ? 'accept' : 'reject')))).toBe('Pay in 45 days');
+  });
+});
+
+describe('signature spots', () => {
+  const spot = (role: string): DocNode => ({ type: 'signatureSpot', attrs: { role } });
+  const base = doc([text('Signed for Acme: ')], [text('Signed for Beta: '), text('x', ins('i1', 'B'))]);
+
+  it('places spots at text offsets, splitting text where needed', () => {
+    // "Signed for Acme: \n" is 18 characters; offset 17 is the end of the first paragraph.
+    const placed = placeSpots(base, { PROPOSER: 17, COUNTERPARTY: 18 + 7 });
+    expect(placed.content).toEqual([
+      { type: 'paragraph', content: [text('Signed for Acme: '), spot('PROPOSER')] },
+      { type: 'paragraph', content: [text('Signed '), spot('COUNTERPARTY'), text('for Beta: '), text('x', ins('i1', 'B'))] },
+    ]);
+    expect(spotRoles(placed)).toEqual(['PROPOSER', 'COUNTERPARTY']);
+  });
+
+  it('moving spots replaces the old ones', () => {
+    const moved = placeSpots(placeSpots(base, { PROPOSER: 0, COUNTERPARTY: 3 }), { PROPOSER: 5, COUNTERPARTY: 5 });
+    expect(spotRoles(moved)).toEqual(['PROPOSER', 'COUNTERPARTY']);
+    expect(moved.content![0]).toEqual({ type: 'paragraph', content: [text('Signe'), spot('PROPOSER'), spot('COUNTERPARTY'), text('d for Acme: ')] });
+  });
+
+  it('spots take no space in plain text and are ignored when comparing', () => {
+    const placed = placeSpots(base, { PROPOSER: 4, COUNTERPARTY: 30 });
+    expect(plainText(placed)).toBe(plainText(base));
+    expect(sameIgnoringSpots(placed, base)).toBe(true);
+    expect(sameIgnoringSpots(placed, doc([text('Signed for Acme!')]))).toBe(false);
+  });
+
+  it('refuses offsets past the end', () => {
+    expect(() => placeSpots(base, { PROPOSER: 0, COUNTERPARTY: 999 })).toThrow();
+  });
+
+  it('resolving changes keeps spots', () => {
+    const placed = placeSpots(base, { PROPOSER: 0, COUNTERPARTY: 18 });
+    expect(spotRoles(resolveChange(placed, 'i1', false))).toEqual(['PROPOSER', 'COUNTERPARTY']);
   });
 });

@@ -98,7 +98,8 @@ import {
   commentAnchorsKey,
   type AnchoredThread,
 } from "@/components/tiptap-ui/redlining/commentAnchors"
-import type { Anchor } from "@/lib/api"
+import { placeSpot, removeSpot, SignatureSpot } from "@/components/tiptap-ui/redlining/signatureSpot"
+import type { Anchor, PartyRole } from "@/lib/api"
 
 import { type ViewMode } from "@/components/tiptap-ui/redlining/RedlineToolbar"
 // import BubbleMenu from "@tiptap/extension-bubble-menu"
@@ -275,9 +276,14 @@ interface SimpleEditorProps {
   onComment?: (anchor: Anchor) => void
   // Shown in the reading popup after Comment.
   readingAction?: ReactNode
+  // Chip text for each side's signature spot.
+  spotLabels?: Record<PartyRole, string>
+  // Placing mode: a click in the text puts this side's spot there; clicking a spot picks it up.
+  placingRole?: PartyRole | null
+  onSpotPicked?: (role: PartyRole) => void
 }
 
-export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anchors, onAnchorsFound, onComment, readingAction }: SimpleEditorProps) {
+export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anchors, onAnchorsFound, onComment, readingAction, spotLabels, placingRole, onSpotPicked }: SimpleEditorProps) {
   const isMobile = useIsBreakpoint()
   const { height } = useWindowSize()
   const [mobileView, setMobileView] = useState<"main" | "highlighter" | "link">(
@@ -320,6 +326,7 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
         onFound: (ids) => onAnchorsFoundRef.current?.(ids),
         onShortcut: () => commentRef.current(),
       }),
+      ...(spotLabels ? [SignatureSpot.configure({ labels: spotLabels })] : [SignatureSpot]),
       TextStyle,
       Color, 
       Table.configure({ resizable: true }),
@@ -491,7 +498,21 @@ export function SimpleEditor({ content, editable, onChange, trackAsPartyId, anch
           </BubbleMenu>
         )}
 
-        <div className={viewClassMap[viewMode]}>
+        <div
+          className={`${viewClassMap[viewMode]} ${placingRole !== undefined ? "placing-spots" : ""}`}
+          onClick={(event) => {
+            if (!editor || placingRole === undefined) return
+            const chip = (event.target as HTMLElement).closest<HTMLElement>("[data-signature-spot]")
+            if (chip) {
+              const role = chip.dataset.signatureSpot as PartyRole
+              removeSpot(editor, role)
+              onSpotPicked?.(role)
+              return
+            }
+            const hit = placingRole && editor.view.posAtCoords({ left: event.clientX, top: event.clientY })
+            if (hit) placeSpot(editor, placingRole, hit.pos)
+          }}
+        >
           <EditorContent
             editor={editor}
             role="presentation"

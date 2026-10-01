@@ -235,6 +235,28 @@ body {
   opacity: 0.65;
 }
 
+/* Signature spots */
+.tiptap .signature-spot {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 0.5rem;
+  border: 1px dashed var(--color-action);
+  border-radius: 999px;
+  color: var(--color-action);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 0.8em;
+  line-height: 1.6;
+  white-space: nowrap;
+  user-select: none;
+}
+.placing-spots .tiptap {
+  cursor: crosshair;
+}
+.placing-spots .tiptap .signature-spot {
+  cursor: pointer;
+  background: rgb(37 99 235 / 0.08);
+}
+
 /* Toolbar scroll indicators: pinned to the visible edges, overlapping the buttons beneath */
 .toolbar-scroll-hint {
   position: sticky;

@@ -25,11 +25,16 @@ export function Modal({ title, open, onOpenChange, children }: { title: string; 
   )
 }
 
-function PartyList({ party, user, heading, pendingLabel }: { party: Party; user: User; heading: string; pendingLabel: string }) {
+function PartyList({ party, user, heading, pendingLabel, signerPicker }: { party: Party; user: User; heading: string; pendingLabel: string; signerPicker?: ReactNode }) {
   return (
     <section>
       <h3 className="text-sm text-ink-muted">{heading}</h3>
       <p className="font-serif text-xl text-ink">{party.orgName}</p>
+      {signerPicker ?? (
+        <p className="mt-1 text-sm text-ink-muted">
+          Signs: <span className="text-ink">{party.signer ? (party.signer.name ?? party.signer.email) : 'Not chosen yet'}</span>
+        </p>
+      )}
       <ul className="mt-3 space-y-2 text-sm">
         {party.participants.map((p) => (
           <li key={p.id} className="flex justify-between gap-3 text-ink">
@@ -84,7 +89,34 @@ export function PeopleDialog({ contract, user, myParty, open, onOpenChange, onCh
     <>
       <Modal title="People" open={open} onOpenChange={onOpenChange}>
         <div className="space-y-8">
-          {myParty && <PartyList party={myParty} user={user} heading="Your side" pendingLabel="Invited" />}
+          {myParty && (
+            <PartyList
+              party={myParty}
+              user={user}
+              heading="Your side"
+              pendingLabel="Invited"
+              signerPicker={
+                <label className="mt-1 flex items-center gap-2 text-sm text-ink-muted">
+                  Signs:
+                  <select
+                    className="rounded-sm border border-rule bg-paper px-2 py-1 text-ink"
+                    value={myParty.signer?.id ?? ''}
+                    disabled={busy || contract.status === 'SIGNED'}
+                    onChange={(e) => void submit(e, () => api(`/contracts/${contract.id}/signer`, { method: 'PATCH', body: { userId: e.target.value } }))}
+                  >
+                    {!myParty.participants.some((p) => p.user.id === myParty.signer?.id) && (
+                      <option value={myParty.signer?.id ?? ''} disabled>
+                        {myParty.signer ? `${myParty.signer.name ?? myParty.signer.email} (not joined yet)` : 'Choose who signs'}
+                      </option>
+                    )}
+                    {myParty.participants.map((p) => (
+                      <option key={p.user.id} value={p.user.id}>{p.user.name ?? p.user.email}</option>
+                    ))}
+                  </select>
+                </label>
+              }
+            />
+          )}
           {otherParty && (
             <PartyList
               party={otherParty}

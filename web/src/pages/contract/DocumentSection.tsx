@@ -3,7 +3,8 @@ import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
 import { Button } from '@/components/ui/button'
 import { plainTextOf, type AnchoredThread } from '@/components/tiptap-ui/redlining/commentAnchors'
-import { api, type Anchor, type ContractDetail, type LockHolder, type User } from '@/lib/api'
+import { spotOffsets } from '@/components/tiptap-ui/redlining/signatureSpot'
+import { api, type Anchor, type ContractDetail, type LockHolder, type PartyRole, type User } from '@/lib/api'
 
 const EMPTY_DOC: JSONContent = { type: 'doc', content: [{ type: 'paragraph' }] }
 const HEARTBEAT_MS = 20_000
@@ -42,10 +43,13 @@ interface DocumentSectionProps {
   selectedThreadId: string | null
   onSelectThread: (threadId: string) => void
   onComment: (anchor: Anchor) => void
+  // Placing mode (proposer's Ready to sign): only signature spots can be put down; Done also marks ready.
+  placing: boolean
+  onPlacingEnd: () => void
 }
 
 export function DocumentSection(props: DocumentSectionProps) {
-  const { contract, user, canEdit, myPartyId, view, selectedChangeId, onSelectChange, onSaved, lockSignal } = props
+  const { contract, user, canEdit, myPartyId, view, selectedChangeId, onSelectChange, onSaved, lockSignal, placing } = props
   const tracking = contract.status !== 'DRAFT'
   const id = contract.id
   const [saved, setSaved] = useState<JSONContent>(contract.draftContent ?? EMPTY_DOC)
@@ -60,6 +64,31 @@ export function DocumentSection(props: DocumentSectionProps) {
   const fileInput = useRef<HTMLInputElement>(null)
 
   const lockedByOther = lock !== null && lock.userId !== user.id
+
+  const orgOf = (role: PartyRole) => contract.parties.find((party) => party.role === role)?.orgName ?? ''
+  const spotLabels = { PROPOSER: `${orgOf('PROPOSER')} signs here`, COUNTERPARTY: `${orgOf('COUNTERPARTY')} signs here` }
+  const [spots, setSpots] = useState(() => spotOffsets(saved))
+  const nextSpot: PartyRole | null = spots.PROPOSER === undefined ? 'PROPOSER' : spots.COUNTERPARTY === undefined ? 'COUNTERPARTY' : null
+
+  function finishPlacing() {
+    void run(async () => {
+      const { PROPOSER, COUNTERPARTY } = spotOffsets(latest.current)
+      await api(`/contracts/${id}/signature-spots`, {
+        method: 'PUT',
+        body: { offsets: { PROPOSER, COUNTERPARTY }, baseText: plainTextOf(latest.current) },
+      })
+      await api(`/contracts/${id}/ready`, { body: { placement: 'SPOTS' } })
+      props.onPlacingEnd()
+    })
+  }
+
+  function cancelPlacing() {
+    latest.current = saved
+    setSpots(spotOffsets(saved))
+    setVersion((v) => v + 1)
+    setError('')
+    props.onPlacingEnd()
+  }
 
   function discard(message: string) {
     setEditing(false)
@@ -193,12 +222,23 @@ export function DocumentSection(props: DocumentSectionProps) {
       {props.selectedThreadId && (
         <style>{`.ProseMirror [data-thread-id="${CSS.escape(props.selectedThreadId)}"] { background: rgb(250 204 21 / 0.6); }`}</style>
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-6 py-4 sm:px-12">
-        <span className="text-sm text-ink-muted">
-          {editing ? (tracking ? 'Editing. Your changes are tracked.' : 'Editing. Save to share with your team.') : lockedByOther ? `${lock.name} is editing` : contract.draftContent ? 'Document' : ''}
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 border-b border-rule px-6 py-4 sm:px-12 ${placing ? 'sticky top-0 z-10 bg-muted' : ''}`}
+      >
+        <span className={placing ? 'text-sm font-medium text-ink' : 'text-sm text-ink-muted'}>
+          {placing
+            ? nextSpot
+              ? `Click where ${orgOf(nextSpot)} signs.`
+              : 'Both spots placed. Click a spot to move it.'
+            : editing ? (tracking ? 'Editing. Your changes are tracked.' : 'Editing. Save to share with your team.') : lockedByOther ? `${lock.name} is editing` : contract.draftContent ? 'Document' : ''}
         </span>
         <div className="flex gap-2">
-          {editing ? (
+          {placing ? (
+            <>
+              <Button variant="outline" disabled={busy} onClick={cancelPlacing}>Cancel</Button>
+              <Button disabled={busy || nextSpot !== null} onClick={finishPlacing}>Done</Button>
+            </>
+          ) : editing ? (
             <>
               <input ref={fileInput} type="file" accept=".docx" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
               <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
@@ -225,15 +265,18 @@ export function DocumentSection(props: DocumentSectionProps) {
             onAnchorsFound={props.onAnchorsFound}
             onComment={comment}
             readingAction={
-              !canEdit ? undefined : lockedByOther ? (
+              !canEdit || placing ? undefined : lockedByOther ? (
                 <span className="comment-bubble-muted">{lock.name} is editing</span>
               ) : (
                 <button type="button" onClick={() => startEditing(false)}>Edit</button>
               )
             }
+            spotLabels={spotLabels}
+            placingRole={placing ? nextSpot : undefined}
             onChange={(content) => {
               latest.current = content
               lastActivity.current = Date.now()
+              setSpots(spotOffsets(content))
             }}
           />
         ) : (

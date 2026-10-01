@@ -10,7 +10,9 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
+  StreamableFile,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -19,7 +21,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 
 import { parseEmail } from '../auth/auth.controller.js';
 import { SessionGuard, type AuthenticatedRequest } from '../auth/session.guard.js';
-import type { PartyRole, Prisma } from '../generated/prisma/client.js';
+import { SignaturePlacement, type PartyRole, type Prisma } from '../generated/prisma/client.js';
 import { ContractsService, type ContractDetail, type TeamMember } from './contracts.service.js';
 import { EditorService, type ChangeItem, type LockHolder } from './editor.service.js';
 
@@ -238,5 +240,68 @@ export class ContractsController {
       throw new BadRequestException('Action must be accept, reject or withdraw.');
     }
     return this.editor.resolve(request.user, id, changeId, action);
+  }
+
+  // placement is required from the proposer only.
+  @Post('contracts/:id/ready')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  markReady(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body('placement') placement: unknown): Promise<void> {
+    if (placement !== undefined && placement !== SignaturePlacement.SPOTS && placement !== SignaturePlacement.PAGE) {
+      throw new BadRequestException('placement must be SPOTS or PAGE.');
+    }
+    return this.editor.markReady(request.user, id, placement);
+  }
+
+  @Delete('contracts/:id/ready')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  undoReady(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<void> {
+    return this.editor.undoReady(request.user, id);
+  }
+
+  // offsets: character positions in the document's plain text; baseText: that plain text.
+  @Put('contracts/:id/signature-spots')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  placeSpots(
+    @Req() request: AuthenticatedRequest,
+    @Param('id') id: string,
+    @Body('offsets') offsets: unknown,
+    @Body('baseText') baseText: unknown,
+  ): Promise<void> {
+    const { PROPOSER, COUNTERPARTY } = (offsets ?? {}) as { PROPOSER?: unknown; COUNTERPARTY?: unknown };
+    const valid = (n: unknown): n is number => Number.isInteger(n) && (n as number) >= 0;
+    if (!valid(PROPOSER) || !valid(COUNTERPARTY) || typeof baseText !== 'string') {
+      throw new BadRequestException('Place both signature spots.');
+    }
+    return this.editor.placeSignatureSpots(request.user, id, { PROPOSER, COUNTERPARTY }, baseText);
+  }
+
+  @Patch('contracts/:id/signer')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  setSigner(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body('userId') userId: unknown): Promise<void> {
+    if (typeof userId !== 'string') {
+      throw new BadRequestException('Choose who signs.');
+    }
+    return this.contracts.setSigner(request.user, id, userId);
+  }
+
+  @Post('contracts/:id/reopen')
+  @HttpCode(204)
+  @UseGuards(SessionGuard)
+  reopen(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<void> {
+    return this.editor.reopen(request.user, id);
+  }
+
+  @Get('contracts/:id/export')
+  @UseGuards(SessionGuard)
+  async export(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Query('format') format: unknown): Promise<StreamableFile> {
+    if (format !== 'docx' && format !== 'pdf') {
+      throw new BadRequestException('format must be docx or pdf.');
+    }
+    const { file, filename, type } = await this.editor.export(request.user, id, format);
+    return new StreamableFile(file, { type, disposition: `attachment; filename="${filename}"` });
   }
 }

@@ -1,6 +1,6 @@
 # Contract Negotiation Platform: Build Progress
 
-30 September 2026. **Phases 1–8 complete. Phase 9 remaining.**
+30 September 2026. **Phases 1–8 complete. Phase 9 planned (9a, 9b), waiting for go-ahead.**
 
 1. [Summary](#1-summary)
 2. [Decisions log](#2-decisions-log)
@@ -25,7 +25,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 6 | Comments, chat, live updates | Done |
 | 7 | Upload diffing, version restore | Done |
 | 8 | AI questions and explanations | Done |
-| 9 | Ready to sign, e-signature, export | Not started |
+| 9 | Ready to sign, e-signature, export | Planned (9a, 9b); waiting for go-ahead |
 
 ### Technology in use
 
@@ -34,6 +34,9 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | API | NestJS 12, TypeScript, Prisma 7.10, PostgreSQL 17, Redis 7 |
 | Web | React 19, Vite, Tailwind 4, TipTap 3, Radix UI |
 | Word conversion | Python 3 with python-docx (`converter/`) |
+| E-signature (planned) | DocuSeal, self-hosted |
+| AI | Claude Sonnet 5.5 via `@anthropic-ai/sdk`, behind a swappable provider |
+| Upload comparison | jsdiff (`diff`) |
 | File storage | Cloudflare R2 (S3-compatible) |
 | Email | Console log in development, Resend in production |
 
@@ -73,6 +76,22 @@ Every question raised during the build and the answer given, in order.
 | 26 | Phase 7 | Tables: what happens on accept? | Deleted text in a cell → cell left empty. All text in a row deleted → accepting removes the row; same for a column. Already-empty rows/columns kept; merged-cell tables only empty cells. |
 | 27 | Phase 7 | Removed list items / table rows in an upload? | Shown in their own bullet / row. Removed table columns in an upload: later (full table matching). |
 | 28 | Phase 8 | How should AI work? | AI tab: **Explain all changes** summary + **Explain** per pending change. **Ask AI**: floating button bottom-right opening a chat window. Neither stored. Claude Sonnet 5.5 behind a swappable provider; 30 AI requests per person per hour. |
+| 29 | Phase 9 | When is a contract "Ready to sign"? | ~~Automatically when the last pending change is resolved, after at least one round of changes.~~ **Replaced by 32.** |
+| 30 | Phase 9 | Which e-signature provider? | ~~Dropbox Sign.~~ **Changed:** DocuSeal, self-hosted in Docker (free, no watermark, embedded signing free, completion notice works locally). |
+| 31 | Phase 9 | Export format? | Both: the user chooses PDF or Word. |
+| 32 | Phase 9 | How does a contract become Ready to sign? | Both sides click **Ready to sign**. Button only after the first send and with zero pending changes; any member can click for their side. Clicked side's button greys: "Waiting for Beta". "At least one round of changes" rule dropped: both can agree to an untouched version. |
+| 33 | Phase 9 | Take a click back? | **Undo ready**, until the other side has also clicked. |
+| 34 | Phase 9 | What clears Ready clicks? | Any saved text change clears both. Placing/moving signature spots does not. |
+| 35 | Phase 9 | Email when only one side clicks Ready? | No; live updates on the page are enough. |
+| 36 | Phase 9 | Who signs? | One signer per side. Default: contract creator (proposer), onboarding email (counterparty). Any member of a side can switch its signer to another member of **that side**, until that side has signed (even if the other side already signed). Only the chosen signer sees **Sign**; others see "Waiting for Alice to sign". |
+| 37 | Phase 9 | Signer switched after the other side signed, but the text names the old signer? | Warn: "Acme has already signed. If the contract names Bob as your signer, the names won't match, and the text can't be changed now. Reopen to fix the wording." |
+| 38 | Phase 9 | How do people sign? | Inside our app: DocuSeal's signing form embedded in the contract page. DocuSeal sends no emails. |
+| 39 | Phase 9 | Where do signatures go? | Proposer decides for both when clicking Ready: **Place signature spots** (placing mode) or **Use a signature page** (we add a page at the end). |
+| 40 | Phase 9 | What is placing mode? | A mode on the contract page where the only action is placing spots: bar "Click where Acme signs" → chip → "Click where Beta signs" → Move / Done. No typing. Works on either side's turn. |
+| 41 | Phase 9 | Are spots redlines? | No. Untracked markers; only the proposer can place/move them. Counterparty sees them read-only; objects by chat, proposer moves them. If the counterparty clicked Ready first, their click stays; their window says "Acme will choose where signatures go. You'll see it before you sign." |
+| 42 | Phase 9 | What do we put on the PDF? | Spot → signature box only (name, title, date lines are the contract's own wording). Added page → "For Acme Ltd" label + signature + date filled in automatically on signing, same for Beta. No person's name on the PDF. |
+| 43 | Phase 9 | Reopen? | Allowed from both-clicked-Ready until **both** have signed; after one side signs, only the side still to sign can Reopen. Document unchanged; DocuSeal request cancelled (any signature discarded); both clicks cleared; turn goes to the reopener; spots kept; Reopened email to both ("…Acme's signature was discarded" when relevant). After fixes: both click Ready again → new PDF, new DocuSeal request, both sign again. Old PDF not stored by us; activity log notes it. |
+| 44 | Phase 9 | Build in one go or split? | Split: 9a (Ready, spots, signer, Reopen, export, emails), 9b (DocuSeal signing). |
 
 ### Technical choices made along the way
 
@@ -220,15 +239,35 @@ Every question raised during the build and the answer given, in order.
 ## 4. Remaining phases
 
 ### Phase 9: Signing and export
-**To do:**
-- **Ready to sign** automatically when no changes are pending; email both sides.
-- E-signature and export blocked while any change is unresolved.
-- **E-signature** via a third-party provider (identity, timestamps, audit trail); contract locked after signing, signed document hash stored; "Signed" email to both sides.
-- **Export** of the agreed contract.
+Decisions 31–44.
 
-**Open questions:**
-- E-signature provider (still undecided).
-- Export format: PDF, Word, or both?
+**Flow**
+1. **Ready to sign button:** after the first send, with zero pending changes. Either side can go first; clicked side sees "Waiting for Beta" + **Undo ready**. A saved text change clears both clicks.
+2. **Proposer's Ready click** asks: **Place signature spots** (placing mode) or **Use a signature page**. Spots are untracked, proposer-only; counterparty sees them read-only and keeps their click if they clicked first.
+3. **Both clicked** → status **Ready to sign**: editing, sending, upload, restore blocked (comments/chat still work). Clean PDF built and sent to DocuSeal. Ready to sign email to both sides.
+4. **Signing:** only each side's chosen signer sees **Sign**; DocuSeal's form opens inside our page. A side can switch its signer until it has signed (warning if the other side already signed).
+5. **Reopen:** from both-clicked until both signed (after one signature, only the unsigned side). Cancels the DocuSeal request, clears clicks, turn to reopener, Reopened email. Next round: new PDF, both sign again.
+6. **Both signed** → DocuSeal notifies our API; signed PDF stored in R2, SHA-256 hash saved, status **Signed**, contract locked, Signed email to both, **Download signed PDF**.
+7. **Export:** clean copy (no red/green), **Word** or **PDF**; refused while any change is pending ("Changes are still pending"). Spots appear as blank signature lines.
+
+**9a (to do):** Ready clicks + undo, placing mode + spots, choose signer, Reopen, export, emails (Ready to sign, Reopened).
+- Database: `ContractParty.readyAt`, `readyByUserId`, `signerUserId`; `Contract.signaturePlacement` (SPOTS | PAGE).
+- Document: inline `signatureSpot` marker (`role` PROPOSER | COUNTERPARTY), shown as a chip; save check exempts spots from tracking, proposer-only.
+- Converter: document data → Word (spots → DocuSeal tags, optional signature page); Word → PDF via LibreOffice (new system dependency).
+- API: `POST/DELETE /contracts/:id/ready`, `PUT /contracts/:id/signature-spots`, `PATCH /contracts/:id/parties/:partyId/signer`, `POST /contracts/:id/reopen`, `GET /contracts/:id/export?format=pdf|docx`; existing blocks extended for Ready to sign / Signed.
+- Web: Ready button states, Ready window, placing-mode bar + chips, "Choose who signs" in People, Reopen, Export menu.
+
+**9b (to do):** DocuSeal.
+- `docker-compose.yml` adds DocuSeal; `api/.env`: `DOCUSEAL_URL`, `DOCUSEAL_API_KEY`, `DOCUSEAL_WEBHOOK_SECRET`. One-time: create local DocuSeal admin, copy API key.
+- Signing request from the PDF (emails off); signer swap updates the DocuSeal signer (no rebuild); Reopen cancels it.
+- API: `GET /contracts/:id/signing` (my signing link), `POST /signing/webhook` (shared secret), `GET /contracts/:id/signed-pdf`.
+- `SigningRequest`: add `signedFileKey`; status PENDING | COMPLETED | CANCELLED.
+- Web: Sign button with embedded DocuSeal form (their script tag, no npm package), "Waiting for … to sign", Signed banner + Download. Signed email to both.
+
+**Limits:** one signature per side (no initials per page); spots exist only in our editor, so a Word upload after the first send loses them (upload notice will say so); identity is email-only (login code + DocuSeal audit trail); signed PDF layout comes from our converter, may differ slightly from the original Word file.
+
+**Also suggested, not decided:**
+- Clearer note while editing a draft: "Draft: changes aren't tracked until you first send it".
 
 ---
 
@@ -239,10 +278,17 @@ Every question raised during the build and the answer given, in order.
 - Live updates are in memory, so they assume a single API process (move to Redis pub/sub if scaled out).
 - A lock that expires from inactivity sends no event; teammates re-check every 30 s while someone else holds it.
 - New comments/messages don't send emails.
+- AI doesn't know which organisation is Buyer/Supplier unless the contract text says so; it may occasionally assume. Could tell it which side proposed the contract.
+- AI hourly limit is in memory (resets on API restart).
 - Upload comparison v1 limits: formatting-only changes untracked; moved paragraph = removed + added; heavy rewrite = full delete + insert; a table column removed in an upload shows struck out inside the neighbouring cells (needs full table matching).
 - Heavy edits right around commented text can mark its thread Outdated sooner.
-- Web has 21 existing TypeScript errors in older prototype files (table toolbar, tracked-change popover) + a deprecated `baseUrl` setting; new code has none.
+- Web typecheck: only a deprecated `baseUrl` setting warning remains.
 - Editor toolbar still has buttons contracts don't need (code block, task list, highlight); trimming suggested, not done.
+
+**Deferred by decision (build later):**
+- Accept/Reject while editing (inside the editor, saved with your edits; needs the server save check reworked).
+- Full table matching for uploads (removed columns shown as their own struck-out column).
+- Recording `restoredFromVersionId` on the version created after a restore (only in the activity log for now).
 - No automated end-to-end tests in the repo; browser tests were run from a scratch folder.
 - On send, pending invites on the receiving side get a new link, so an older invite link for that person stops working.
 
@@ -261,4 +307,4 @@ cd converter && .venv/bin/python app.py   # Word converter on :8001
 cd web && npm run dev                     # web on :5173, /api forwarded to the API
 ```
 
-`api/.env` needs `DATABASE_URL`, the R2 keys and bucket. `MAIL_PROVIDER=log` prints emails and login codes to the API console.
+`api/.env` needs `DATABASE_URL`, the R2 keys and bucket. `MAIL_PROVIDER=log` prints emails and login codes to the API console. `ANTHROPIC_API_KEY` turns on the AI features (optional: `AI_MODEL`, `AI_MAX_PER_HOUR`).

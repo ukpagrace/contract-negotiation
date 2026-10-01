@@ -1,16 +1,24 @@
-"""Converts an uploaded .docx into TipTap JSON for the contract editor.
+"""Converts an uploaded .docx into TipTap JSON for the contract editor, and back.
 
 Only emits node and mark types that exist in the web editor's schema.
 Word tracked changes are accepted (insertions kept, deletions dropped) and
 Word comments are dropped, per spec section 4.2.
+
+/export turns a clean (no pending changes) TipTap document into .docx, or into
+PDF through LibreOffice.
 """
 
 import io
 import json
 import os
+import shutil
+import subprocess
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.table import Table
 from docx.text.paragraph import Paragraph
@@ -212,19 +220,153 @@ def convert(data: bytes) -> dict:
     }
 
 
+EXPORT_ALIGN = {
+    "center": WD_ALIGN_PARAGRAPH.CENTER,
+    "right": WD_ALIGN_PARAGRAPH.RIGHT,
+    "justify": WD_ALIGN_PARAGRAPH.JUSTIFY,
+}
+TEXTBLOCKS = ("paragraph", "heading", "codeBlock")
+SIGNATURE_LINE = "_" * 30
+
+
+def add_inline(paragraph, nodes: list[dict]):
+    for node in nodes:
+        if node["type"] == "hardBreak":
+            paragraph.add_run().add_break()
+        elif node["type"] == "signatureSpot":
+            paragraph.add_run(SIGNATURE_LINE)
+        elif node["type"] == "text":
+            run = paragraph.add_run(node.get("text", ""))
+            marks = {mark["type"] for mark in node.get("marks", [])}
+            run.bold = "bold" in marks or None
+            run.italic = "italic" in marks or None
+            run.underline = "underline" in marks or None
+            run.font.strike = "strike" in marks or None
+            run.font.superscript = "superscript" in marks or None
+            run.font.subscript = "subscript" in marks or None
+
+
+def add_textblock(container, node: dict, style: str | None = None):
+    if node["type"] == "heading":
+        style = style or f"Heading {min(node.get('attrs', {}).get('level', 1), 9)}"
+    paragraph = container.add_paragraph(style=style)
+    align = EXPORT_ALIGN.get((node.get("attrs") or {}).get("textAlign"))
+    if align is not None:
+        paragraph.alignment = align
+    add_inline(paragraph, node.get("content", []))
+
+
+def add_blocks(container, nodes: list[dict], depth: int = 0):
+    for node in nodes:
+        kind = node["type"]
+        if kind in TEXTBLOCKS:
+            add_textblock(container, node)
+        elif kind in ("bulletList", "orderedList", "taskList"):
+            # Word's built-in list styles go three levels deep.
+            base = "List Number" if kind == "orderedList" else "List Bullet"
+            style = base if depth == 0 else f"{base} {min(depth + 1, 3)}"
+            for item in node.get("content", []):
+                first, *rest = item.get("content", []) or [{"type": "paragraph"}]
+                if first["type"] in TEXTBLOCKS:
+                    add_textblock(container, first, style)
+                else:
+                    rest = [first, *rest]
+                add_blocks(container, rest, depth + 1)
+        elif kind == "table":
+            add_table(container, node)
+        elif kind == "blockquote":
+            add_blocks(container, node.get("content", []), depth)
+        elif kind == "horizontalRule":
+            container.add_paragraph()
+
+
+def add_table(container, node: dict):
+    rows = node.get("content", [])
+    width = max((sum((cell.get("attrs") or {}).get("colspan", 1) for cell in row.get("content", [])) for row in rows), default=0)
+    if not rows or width == 0:
+        return
+    table = container.add_table(rows=len(rows), cols=width)
+    table.style = "Table Grid"
+    for r, row in enumerate(rows):
+        c = 0
+        for cell_node in row.get("content", []):
+            span = (cell_node.get("attrs") or {}).get("colspan", 1)
+            cell = table.cell(r, c)
+            if span > 1:
+                cell = cell.merge(table.cell(r, c + span - 1))
+            placeholder = cell.paragraphs[0]._p
+            add_blocks(cell, cell_node.get("content", []))
+            # A cell must keep one paragraph; drop the empty starter one if content was added.
+            if len(cell.paragraphs) > 1:
+                cell._tc.remove(placeholder)
+            c += span
+
+
+def soffice_path() -> str | None:
+    configured = os.environ.get("SOFFICE")
+    if configured:
+        return configured
+    mac = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+    return shutil.which("soffice") or (mac if os.path.exists(mac) else None)
+
+
+def export(content: dict, title: str, fmt: str) -> bytes:
+    document = Document()
+    document.core_properties.title = title
+    add_blocks(document, content.get("content", []))
+    buffer = io.BytesIO()
+    document.save(buffer)
+    if fmt == "docx":
+        return buffer.getvalue()
+
+    soffice = soffice_path()
+    if soffice is None:
+        raise FileNotFoundError("LibreOffice not found")
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, "contract.docx")
+        with open(source, "wb") as f:
+            f.write(buffer.getvalue())
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "pdf", "--outdir", tmp, source],
+            check=True, capture_output=True, timeout=120,
+        )
+        with open(os.path.join(tmp, "contract.pdf"), "rb") as f:
+            return f.read()
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        if self.path != "/convert":
+        url = urlparse(self.path)
+        if url.path not in ("/convert", "/export"):
             return self.respond(404, {"message": "Not found"})
         length = int(self.headers.get("Content-Length") or 0)
         if length == 0 or length > MAX_BYTES:
             return self.respond(413, {"message": "File must be between 1 byte and 25 MB."})
         data = self.rfile.read(length)
+        if url.path == "/export":
+            return self.export(data, parse_qs(url.query).get("format", ["docx"])[0])
         try:
             result = convert(data)
         except Exception:
             return self.respond(422, {"message": "That file couldn't be read as a Word (.docx) document."})
         self.respond(200, result)
+
+    def export(self, data: bytes, fmt: str):
+        if fmt not in ("docx", "pdf"):
+            return self.respond(400, {"message": "Format must be docx or pdf."})
+        body = json.loads(data)
+        try:
+            result = export(body["content"], body.get("title", ""), fmt)
+        except FileNotFoundError:
+            return self.respond(503, {"message": "PDF export needs LibreOffice installed on the server."})
+        except subprocess.SubprocessError:
+            return self.respond(502, {"message": "The PDF couldn't be made. Try again, or export as Word."})
+        kind = "application/pdf" if fmt == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        self.send_response(200)
+        self.send_header("Content-Type", kind)
+        self.send_header("Content-Length", str(len(result)))
+        self.end_headers()
+        self.wfile.write(result)
 
     def respond(self, status: int, body: dict):
         payload = json.dumps(body).encode()

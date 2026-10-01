@@ -4,10 +4,11 @@ import { randomBytes } from 'node:crypto';
 
 import { hashToken } from '../auth/auth.service.js';
 import type { AppConfig } from '../config/configuration.js';
-import { PartyRole, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
+import { ContractStatus, PartyRole, type ContractParty, type Prisma, type User } from '../generated/prisma/client.js';
 import { MAIL_PROVIDER, type MailProvider } from '../mail/mail.provider.js';
 import { inviteEmail } from '../mail/mail.templates.js';
 import { PrismaService } from '../prisma.service.js';
+import { sameIgnoringSpots, type DocNode } from './changes.js';
 import { EventsService } from './events.service.js';
 
 export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -31,11 +32,13 @@ const contractDetail = {
     include: {
       participants: { include: { user: { select: { id: true, email: true, name: true } } } },
       invites: { where: { acceptedAt: null }, select: { id: true, email: true, expiresAt: true } },
+      signer: { select: { id: true, email: true, name: true } },
     },
   },
 } satisfies Prisma.ContractInclude;
 
-export type ContractDetail = Prisma.ContractGetPayload<{ include: typeof contractDetail }>;
+// hasUnsentChanges: the working draft differs from what was last sent (spots aside).
+export type ContractDetail = Prisma.ContractGetPayload<{ include: typeof contractDetail }> & { hasUnsentChanges: boolean };
 
 @Injectable()
 export class ContractsService {
@@ -72,6 +75,10 @@ export class ContractsService {
       const counterparty = created.parties.find((party) => party.role === PartyRole.COUNTERPARTY)!;
 
       await tx.contract.update({ where: { id: created.id }, data: { currentTurnPartyId: proposer.id } });
+      // Default signers: the creator, and the counterparty contact (an account is made for them now).
+      const contact = await tx.user.upsert({ where: { email: input.counterpartyEmail }, create: { email: input.counterpartyEmail }, update: {} });
+      await tx.contractParty.update({ where: { id: proposer.id }, data: { signerUserId: user.id } });
+      await tx.contractParty.update({ where: { id: counterparty.id }, data: { signerUserId: contact.id } });
       await tx.participant.create({ data: { partyId: proposer.id, userId: user.id, joinedAt: new Date() } });
       if (input.upload) {
         await tx.uploadedFile.create({ data: { contractId: created.id, s3Key: input.upload.s3Key, uploadedById: user.id } });
@@ -111,7 +118,7 @@ export class ContractsService {
     for (const invite of invites) {
       await this.sendInvite(user, contract.title, invite.email, invite.token);
     }
-    return contract;
+    return { ...contract, hasUnsentChanges: false };
   }
 
   async list(user: User): Promise<{ id: string; title: string; status: string; updatedAt: Date }[]> {
@@ -125,15 +132,39 @@ export class ContractsService {
   async get(user: User, contractId: string): Promise<ContractDetail> {
     const party = await this.partyOf(user, contractId);
     const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId }, include: contractDetail });
-    // The working draft is private to the side whose turn it is; the other side sees what was last sent.
-    if (contract.currentTurnPartyId !== party.id) {
-      const lastSent = await this.prisma.contractVersion.findFirst({
-        where: { contractId },
-        orderBy: { versionNumber: 'desc' },
-      });
-      contract.draftContent = lastSent?.content ?? null;
+    const lastSent = await this.lastSent(contractId);
+    const hasUnsentChanges = !lastSent || !sameIgnoringSpots(contract.draftContent as unknown as DocNode, lastSent as unknown as DocNode);
+    // The working draft is private to the side whose turn it is; the other side sees what was last
+    // sent. When the two differ only by signature spots, both see the draft so the spots show.
+    if (contract.currentTurnPartyId !== party.id && hasUnsentChanges) {
+      contract.draftContent = lastSent;
     }
-    return contract;
+    return { ...contract, hasUnsentChanges };
+  }
+
+  async lastSent(contractId: string): Promise<Prisma.JsonValue | null> {
+    const version = await this.prisma.contractVersion.findFirst({ where: { contractId }, orderBy: { versionNumber: 'desc' } });
+    return version?.content ?? null;
+  }
+
+  // A side picks its own signer from the people on that side.
+  async setSigner(user: User, contractId: string, signerUserId: string): Promise<void> {
+    const party = await this.partyOf(user, contractId);
+    const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
+    if (contract.status === ContractStatus.SIGNED) {
+      throw new ForbiddenException('This contract is already signed.');
+    }
+    const member = await this.prisma.participant.findUnique({ where: { partyId_userId: { partyId: party.id, userId: signerUserId } } });
+    if (!member) {
+      throw new BadRequestException(`The signer must be someone on ${party.orgName}'s side.`);
+    }
+    await this.prisma.$transaction([
+      this.prisma.contractParty.update({ where: { id: party.id }, data: { signerUserId } }),
+      this.prisma.activityLog.create({
+        data: { contractId, actorUserId: user.id, type: 'SIGNER_CHANGED', payload: { partyId: party.id, signerUserId } },
+      }),
+    ]);
+    this.events.publish(contractId, 'contract');
   }
 
   async listVersions(

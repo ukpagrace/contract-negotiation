@@ -22,6 +22,11 @@ enum ContractStatus {
   SIGNED
 }
 
+enum SignaturePlacement {
+  SPOTS
+  PAGE
+}
+
 enum ChangeType {
   INSERT
   DELETE
@@ -62,6 +67,8 @@ model User {
   uploadedFiles     UploadedFile[]
   activity          ActivityLog[]
   invitesSent       Invite[]
+  partiesReadied    ContractParty[] @relation("PartyReadyBy")
+  partiesSigning    ContractParty[] @relation("PartySigner")
 }
 
 model Session {
@@ -93,6 +100,7 @@ model Contract {
   status             ContractStatus @default(DRAFT)
   currentTurnPartyId String?
   draftContent       Json
+  signaturePlacement SignaturePlacement?
   createdById        String
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
@@ -115,8 +123,13 @@ model ContractParty {
   contractId String
   role       PartyRole
   orgName    String
+  readyAt       DateTime?
+  readyByUserId String?
+  signerUserId  String?
 
   contract       Contract          @relation("ContractParties", fields: [contractId], references: [id], onDelete: Cascade)
+  readyBy        User?             @relation("PartyReadyBy", fields: [readyByUserId], references: [id])
+  signer         User?             @relation("PartySigner", fields: [signerUserId], references: [id])
   turnOf         Contract[]        @relation("CurrentTurn")
   participants   Participant[]
   invites        Invite[]

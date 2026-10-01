@@ -4,7 +4,8 @@ import { ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { JSONContent } from '@tiptap/react'
 import { SimpleEditor } from '@/components/tiptap-templates/simple/simple-editor'
-import { api, type ChangeItem, type ChatItem, type ContractDetail, type ThreadItem, type User, type VersionSummary } from '@/lib/api'
+import { spotOffsets } from '@/components/tiptap-ui/redlining/signatureSpot'
+import { api, ApiError, type ChangeItem, type ChatItem, type ContractDetail, type ThreadItem, type User, type VersionSummary } from '@/lib/api'
 import { ChangesPanel, type ChangeAction } from './ChangesPanel'
 import { StatusBadge } from '../Contracts'
 import { AiPanel, AskAi } from './AiPanels'
@@ -65,6 +66,12 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
   // Ids of text threads whose text the editor found; null until it has looked.
   const [foundThreadIds, setFoundThreadIds] = useState<string[] | null>(null)
+  const [readyOpen, setReadyOpen] = useState(false)
+  const [reopenOpen, setReopenOpen] = useState(false)
+  const [placing, setPlacing] = useState(false)
+  // Errors from Ready to sign, Undo, Reopen and Export, shown under the header.
+  const [actionError, setActionError] = useState('')
+  const [actionBusy, setActionBusy] = useState(false)
 
   async function load() {
     try {
@@ -197,12 +204,65 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
     }
   }
 
+  async function act(action: () => Promise<void>) {
+    setActionBusy(true)
+    setActionError('')
+    try {
+      await action()
+      await load()
+    } catch (err) {
+      setActionError((err as Error).message)
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  // The file comes back as a download rather than JSON, so this skips api().
+  function exportAs(format: 'docx' | 'pdf') {
+    void act(async () => {
+      const response = await fetch(`/api/contracts/${id}/export?format=${format}`)
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { message?: string }
+        throw new ApiError(response.status, data.message ?? response.statusText)
+      }
+      const filename = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `contract.${format}`
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(await response.blob())
+      link.download = filename
+      link.click()
+      URL.revokeObjectURL(link.href)
+    })
+  }
+
   if (!contract) return <p className="px-6 py-20 text-sm text-destructive">{error}</p>
 
   const myParty = contract.parties.find((party) => party.participants.some((p) => p.user.id === user.id))
   const turnParty = contract.parties.find((party) => party.id === contract.currentTurnPartyId)
   const otherParty = contract.parties.find((party) => party.id !== myParty?.id)
+  const proposer = contract.parties.find((party) => party.role === 'PROPOSER')
   const canSend = myTurn && contract.status !== 'READY_TO_SIGN' && contract.status !== 'SIGNED'
+  const negotiating = contract.status === 'WITH_PROPOSER' || contract.status === 'WITH_COUNTERPARTY'
+  // Why Ready to sign can't be clicked yet, if it can't.
+  const readyBlocker =
+    changes.length > 0
+      ? 'Every change must be accepted or rejected first.'
+      : !contract.hasUnsentChanges
+        ? ''
+        : myTurn
+          ? 'Send your latest changes first, so the other side sees the final text.'
+          : `${otherParty?.orgName} has changes they haven't sent yet.`
+  const spotsPlaced = contract.draftContent !== null && Object.keys(spotOffsets(contract.draftContent)).length === 2
+  const labels = contract.parties.reduce(
+    (all, party) => ({ ...all, [party.role]: `${party.orgName} signs here` }),
+    { PROPOSER: '', COUNTERPARTY: '' },
+  )
+
+  function markReady(placement?: 'SPOTS' | 'PAGE') {
+    void act(async () => {
+      await api(`/contracts/${id}/ready`, { body: placement ? { placement } : {} })
+      setReadyOpen(false)
+    })
+  }
 
   return (
     <div className="flex flex-1 flex-col">
@@ -212,10 +272,15 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
           <h2 className="m-0 truncate font-serif text-2xl font-medium text-ink">{contract.title}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-3 text-sm">
             <StatusBadge status={contract.status} />
-            {turnParty && (
+            {contract.status === 'READY_TO_SIGN' ? (
+              <span className="font-medium text-action">Both sides are ready to sign</span>
+            ) : turnParty && (
               <span className={myTurn ? 'font-medium text-action' : 'text-ink-muted'}>
                 {myTurn ? 'Your turn' : `Waiting for ${turnParty.orgName} to respond`}
               </span>
+            )}
+            {negotiating && otherParty?.readyAt && !myParty?.readyAt && (
+              <span className="text-ink-muted">· {otherParty.orgName} is ready to sign</span>
             )}
           </div>
         </div>
@@ -244,6 +309,43 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
               ))}
             </DropdownMenu.RadioGroup>
           </Menu>
+          <Menu label="Export">
+            <p className="px-3 py-2 text-xs text-ink-muted">A clean copy, without red or green marks.</p>
+            <DropdownMenu.Item className={menuItemClass} onSelect={() => exportAs('docx')}>Word (.docx)</DropdownMenu.Item>
+            <DropdownMenu.Item className={menuItemClass} onSelect={() => exportAs('pdf')}>PDF</DropdownMenu.Item>
+          </Menu>
+          {negotiating && myParty?.readyAt && (
+            <>
+              <Button variant="outline" disabled>Waiting for {otherParty?.orgName}</Button>
+              <Button variant="ghost" disabled={actionBusy} onClick={() => void act(() => api(`/contracts/${id}/ready`, { method: 'DELETE' }))}>
+                Undo ready
+              </Button>
+            </>
+          )}
+          {negotiating && !myParty?.readyAt && (
+            <Button
+              variant="outline"
+              disabled={Boolean(readyBlocker) || placing}
+              title={readyBlocker || undefined}
+              onClick={() => {
+                setActionError('')
+                setReadyOpen(true)
+              }}
+            >
+              Ready to sign
+            </Button>
+          )}
+          {contract.status === 'READY_TO_SIGN' && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setActionError('')
+                setReopenOpen(true)
+              }}
+            >
+              Reopen for changes
+            </Button>
+          )}
           {canSend && (
             <Button
               onClick={() => {
@@ -256,6 +358,12 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
           )}
         </div>
       </header>
+      {actionError && !readyOpen && !reopenOpen && (
+        <p className="border-b border-rule bg-paper px-6 py-3 text-sm text-destructive">{actionError}</p>
+      )}
+      {negotiating && !myParty?.readyAt && readyBlocker && otherParty?.readyAt && (
+        <p className="border-b border-rule bg-paper px-6 py-3 text-sm text-ink-muted">Ready to sign: {readyBlocker}</p>
+      )}
 
       <div className="grid flex-1 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <main className="min-w-0 px-4 py-8 sm:px-8">
@@ -282,7 +390,7 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                   </div>
                 </div>
                 <div className={`px-6 sm:px-12 ${view === 'theirs' ? 'redline-theirs' : ''}`}>
-                  <SimpleEditor key={viewing.versionNumber} content={viewing.content} editable={false} />
+                  <SimpleEditor key={viewing.versionNumber} content={viewing.content} editable={false} spotLabels={labels} />
                 </div>
               </section>
             )}
@@ -303,6 +411,11 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
                 selectedThreadId={selectedThreadId}
                 onSelectThread={selectThread}
                 onComment={(anchor) => startThread({ anchor })}
+                placing={placing}
+                onPlacingEnd={() => {
+                  setPlacing(false)
+                  void load()
+                }}
               />
             </div>
           </div>
@@ -371,6 +484,80 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
         <div className="mt-8 flex gap-2">
           <Button size="lg" onClick={() => void restore()}>Restore</Button>
           <Button size="lg" variant="outline" onClick={() => setRestoreOpen(false)}>Cancel</Button>
+        </div>
+      </Modal>
+
+      <Modal title="Ready to sign?" open={readyOpen} onOpenChange={setReadyOpen}>
+        <p className="text-sm leading-relaxed text-ink-muted">
+          You're confirming this text is final for {myParty?.orgName}. Once both sides are ready, the contract can be signed. Any
+          change to the text before then clears both sides' Ready.
+        </p>
+        {myParty?.role === 'PROPOSER' ? (
+          <>
+            <p className="mt-6 text-sm font-medium text-ink">Where should signatures go?</p>
+            <div className="mt-3 flex flex-col gap-2">
+              <Button
+                size="lg"
+                disabled={actionBusy}
+                onClick={() => {
+                  setReadyOpen(false)
+                  setViewing(null)
+                  setPlacing(true)
+                }}
+              >
+                {spotsPlaced ? 'Move signature spots' : 'Place signature spots'}
+              </Button>
+              {spotsPlaced && (
+                <Button size="lg" variant="outline" disabled={actionBusy} onClick={() => markReady('SPOTS')}>
+                  Keep spots where they are
+                </Button>
+              )}
+              <Button size="lg" variant="outline" disabled={actionBusy} onClick={() => markReady('PAGE')}>
+                Use a signature page
+              </Button>
+            </div>
+            <p className="mt-3 text-xs text-ink-muted">
+              Spots mark where each side signs in the document. If you don't place them, a signature page is added at the end.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-4 text-sm leading-relaxed text-ink">
+              {!proposer?.readyAt
+                ? `${proposer?.orgName} will choose where signatures go. You'll see it before you sign.`
+                : contract.signaturePlacement === 'SPOTS'
+                  ? `Signatures will go where ${proposer.orgName} marked.`
+                  : 'Signatures will go on a page added at the end.'}
+            </p>
+            <div className="mt-8 flex gap-2">
+              <Button size="lg" disabled={actionBusy} onClick={() => markReady()}>I'm ready to sign</Button>
+              <Button size="lg" variant="outline" onClick={() => setReadyOpen(false)}>Cancel</Button>
+            </div>
+          </>
+        )}
+        {actionError && <p className="mt-4 text-sm text-destructive">{actionError}</p>}
+      </Modal>
+
+      <Modal title="Reopen for changes?" open={reopenOpen} onOpenChange={setReopenOpen}>
+        <p className="text-sm leading-relaxed text-ink-muted">
+          The contract goes back to negotiating and it becomes your turn. The text doesn't change. Both sides are emailed and will
+          need to click Ready to sign again.
+        </p>
+        {actionError && <p className="mt-4 text-sm text-destructive">{actionError}</p>}
+        <div className="mt-8 flex gap-2">
+          <Button
+            size="lg"
+            disabled={actionBusy}
+            onClick={() =>
+              void act(async () => {
+                await api(`/contracts/${id}/reopen`, { method: 'POST' })
+                setReopenOpen(false)
+              })
+            }
+          >
+            Reopen
+          </Button>
+          <Button size="lg" variant="outline" onClick={() => setReopenOpen(false)}>Cancel</Button>
         </div>
       </Modal>
 

@@ -154,6 +154,7 @@ export function resolveChange(doc: DocNode, changeId: string, accept: boolean): 
 export function plainText(node: DocNode): string {
   if (node.type === 'text') return node.text ?? '';
   if (node.type === 'hardBreak') return '\n';
+  if (node.type === SPOT) return '';
   const inner = (node.content ?? []).map(plainText).join('');
   return node.type === 'doc' ? inner : `${inner}\n`;
 }
@@ -175,6 +176,87 @@ export function settleChanges(doc: DocNode, decide: (kind: ChangeKind, authorPar
       return marks.length ? { ...rest, marks } : rest;
     }) ?? { type: 'doc', content: [{ type: 'paragraph' }] }
   );
+}
+
+// Signature spots: untracked inline markers, placed by the proposer, showing where each side signs.
+// Positions are character offsets into plainText(), where a spot takes no space.
+
+export const SPOT = 'signatureSpot';
+
+export type SpotRole = 'PROPOSER' | 'COUNTERPARTY';
+
+// Also merges text split around a removed spot, so documents differing only by spots compare equal.
+export function stripSpots(node: DocNode): DocNode {
+  if (!node.content) return node;
+  const children: DocNode[] = [];
+  for (const child of node.content) {
+    if (child.type === SPOT) continue;
+    const next = stripSpots(child);
+    const last = children[children.length - 1];
+    if (next.type === 'text' && last?.type === 'text' && sameMarks(last, next)) {
+      children[children.length - 1] = { ...last, text: (last.text ?? '') + (next.text ?? '') };
+    } else {
+      children.push(next);
+    }
+  }
+  return { ...node, content: children };
+}
+
+export function sameIgnoringSpots(a: DocNode, b: DocNode): boolean {
+  return JSON.stringify(stripSpots(a)) === JSON.stringify(stripSpots(b));
+}
+
+export function spotRoles(doc: DocNode): SpotRole[] {
+  const roles: SpotRole[] = [];
+  const walk = (node: DocNode) => {
+    if (node.type === SPOT) roles.push(node.attrs?.role as SpotRole);
+    node.content?.forEach(walk);
+  };
+  walk(doc);
+  return roles;
+}
+
+// Replaces any spots with ones at the given offsets. Offsets must fall inside a text block.
+export function placeSpots(doc: DocNode, offsets: Record<SpotRole, number>): DocNode {
+  const pending = (Object.entries(offsets) as [SpotRole, number][]).sort((a, b) => a[1] - b[1]);
+  let pos = 0;
+  const spot = (role: SpotRole): DocNode => ({ type: SPOT, attrs: { role } });
+  const place = (node: DocNode): DocNode => {
+    if (!TEXTBLOCKS.has(node.type)) {
+      const result = node.content ? { ...node, content: node.content.map(place) } : node;
+      if (node.type !== 'doc') pos += 1;
+      return result;
+    }
+    const out: DocNode[] = [];
+    const dropAt = (at: number) => {
+      while (pending.length && pending[0][1] === at) out.push(spot(pending.shift()![0]));
+    };
+    for (const child of node.content ?? []) {
+      dropAt(pos);
+      if (child.type !== 'text') {
+        out.push(child);
+        pos += 1;
+        continue;
+      }
+      const text = child.text ?? '';
+      let start = 0;
+      // Offsets equal to `pos` were placed by dropAt, so anything left here falls inside this text.
+      while (pending.length && pending[0][1] >= pos + start && pending[0][1] < pos + text.length) {
+        const cut = pending[0][1] - pos;
+        if (cut > start) out.push({ ...child, text: text.slice(start, cut) });
+        out.push(spot(pending.shift()![0]));
+        start = cut;
+      }
+      out.push({ ...child, text: text.slice(start) });
+      pos += text.length;
+    }
+    dropAt(pos);
+    pos += 1;
+    return { ...node, content: out };
+  };
+  const result = place(stripSpots(doc));
+  if (pending.length) throw new Error('Spot offset is outside the text.');
+  return result;
 }
 
 // Upload comparison (spec section 4). Paragraph-level blocks are matched first, leftovers are

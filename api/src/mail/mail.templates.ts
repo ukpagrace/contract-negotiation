@@ -69,3 +69,38 @@ export function contractSentEmail(to: string, senderOrg: string, contractTitle: 
     ),
   };
 }
+
+export function readyToSignEmail(to: string, contractTitle: string, link: string): OutboundEmail {
+  const text =
+    `Both sides have agreed the final text of "${contractTitle}". It's ready to sign.\n\n` +
+    `Open it here: ${link}`;
+  return {
+    to,
+    subject: `${contractTitle} is ready to sign`,
+    text,
+    html: wrap(
+      'Ready to sign',
+      `<p style="margin:0 0 14px"><strong>${escapeHtml(contractTitle)}</strong></p>` +
+        '<p style="margin:0 0 14px">Both sides have agreed the final text.</p>' +
+        `<p style="margin:0"><a href="${link}">Open the contract</a></p>`,
+    ),
+  };
+}
+
+export function reopenedEmail(to: string, reopenerOrg: string, contractTitle: string, link: string): OutboundEmail {
+  const text =
+    `${reopenerOrg} reopened "${contractTitle}" for changes. ` +
+    'Both sides will need to click Ready to sign again.\n\n' +
+    `Open it here: ${link}`;
+  return {
+    to,
+    subject: `${reopenerOrg} reopened ${contractTitle}`,
+    text,
+    html: wrap(
+      `${escapeHtml(reopenerOrg)} reopened a contract for changes`,
+      `<p style="margin:0 0 14px"><strong>${escapeHtml(contractTitle)}</strong></p>` +
+        '<p style="margin:0 0 14px">Both sides will need to click Ready to sign again.</p>' +
+        `<p style="margin:0"><a href="${link}">Open the contract</a></p>`,
+    ),
+  };
+}

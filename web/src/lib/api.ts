@@ -21,10 +21,16 @@ export interface ContractDetail {
   status: string
   currentTurnPartyId: string | null
   draftContent: JSONContent | null
+  // The working draft differs from what was last sent.
+  hasUnsentChanges: boolean
+  signaturePlacement: 'SPOTS' | 'PAGE' | null
   parties: {
     id: string
     role: PartyRole
     orgName: string
+    // Set while this side has clicked Ready to sign.
+    readyAt: string | null
+    signer: User | null
     participants: { id: string; user: User }[]
     invites: { id: string; email: string; expiresAt: string }[]
   }[]

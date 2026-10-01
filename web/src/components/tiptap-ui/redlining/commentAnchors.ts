@@ -31,6 +31,7 @@ function flatten(doc: PMNode): Flat {
       flat.positions.push(pos)
       return
     }
+    if (node.type.name === 'signatureSpot') return
     node.forEach((child, offset) => walk(child, pos + 1 + offset))
     flat.text += '\n'
     flat.positions.push(-1)
@@ -43,6 +44,7 @@ function flatten(doc: PMNode): Flat {
 export function plainTextOf(node: JSONContent): string {
   if (node.type === 'text') return node.text ?? ''
   if (node.type === 'hardBreak') return '\n'
+  if (node.type === 'signatureSpot') return ''
   const inner = (node.content ?? []).map(plainTextOf).join('')
   return node.type === 'doc' ? inner : `${inner}\n`
 }
