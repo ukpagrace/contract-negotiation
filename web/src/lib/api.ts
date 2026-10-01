@@ -31,9 +31,12 @@ export interface ContractDetail {
     // Set while this side has clicked Ready to sign.
     readyAt: string | null
     signer: User | null
+    signedAt: string | null
     participants: { id: string; user: User }[]
     invites: { id: string; email: string; expiresAt: string }[]
   }[]
+  // The open or finished signing request; empty if signing hasn't started (or couldn't).
+  signingRequests: { status: 'PENDING' | 'COMPLETED'; signedDocHash: string | null; createdAt: string }[]
 }
 
 export interface VersionSummary {

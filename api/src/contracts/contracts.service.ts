@@ -35,6 +35,13 @@ const contractDetail = {
       signer: { select: { id: true, email: true, name: true } },
     },
   },
+  // The open or finished signing request, if any.
+  signingRequests: {
+    where: { status: { in: ['PENDING', 'COMPLETED'] } },
+    select: { status: true, unsignedHash: true, signedDocHash: true, createdAt: true },
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+  },
 } satisfies Prisma.ContractInclude;
 
 // hasUnsentChanges: the working draft differs from what was last sent (spots aside).

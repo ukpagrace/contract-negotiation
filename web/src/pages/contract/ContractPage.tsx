@@ -12,6 +12,7 @@ import { AiPanel, AskAi } from './AiPanels'
 import { ChatPanel, CommentsPanel, type ThreadTarget } from './DiscussionPanels'
 import { DocumentSection, ViewStyles, type ViewMode } from './DocumentSection'
 import { Modal, PeopleDialog } from './PeopleDialog'
+import { SignDialog } from './SignDialog'
 import { Sidebar, type Tab } from './Sidebar'
 
 const viewLabels: Record<ViewMode, string> = {
@@ -72,6 +73,7 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   // Errors from Ready to sign, Undo, Reopen and Export, shown under the header.
   const [actionError, setActionError] = useState('')
   const [actionBusy, setActionBusy] = useState(false)
+  const [signOpen, setSignOpen] = useState(false)
 
   async function load() {
     try {
@@ -218,14 +220,14 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
   }
 
   // The file comes back as a download rather than JSON, so this skips api().
-  function exportAs(format: 'docx' | 'pdf') {
+  function download(path: string) {
     void act(async () => {
-      const response = await fetch(`/api/contracts/${id}/export?format=${format}`)
+      const response = await fetch(`/api/contracts/${id}${path}`)
       if (!response.ok) {
         const data = (await response.json().catch(() => ({}))) as { message?: string }
         throw new ApiError(response.status, data.message ?? response.statusText)
       }
-      const filename = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? `contract.${format}`
+      const filename = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'contract'
       const link = document.createElement('a')
       link.href = URL.createObjectURL(await response.blob())
       link.download = filename
@@ -252,6 +254,22 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
           ? 'Send your latest changes first, so the other side sees the final text.'
           : `${otherParty?.orgName} has changes they haven't sent yet.`
   const spotsPlaced = contract.draftContent !== null && Object.keys(spotOffsets(contract.draftContent)).length === 2
+  const signing = contract.signingRequests[0]
+  const signerName = (party: (typeof contract.parties)[number]) => party.signer?.name ?? party.signer?.email ?? 'someone'
+  const canSign = contract.status === 'READY_TO_SIGN' && signing?.status === 'PENDING' && myParty?.signer?.id === user.id && !myParty.signedAt
+  // Signing is stuck: a side still has to choose a signer, the document to sign couldn't be made,
+  // or both have signed but the signed copy couldn't be made.
+  const signingBlocker =
+    contract.status !== 'READY_TO_SIGN'
+      ? ''
+      : !signing
+        ? contract.parties.some((party) => !party.signer)
+          ? `${contract.parties.find((party) => !party.signer)?.orgName} needs to choose who signs (People).`
+          : "Signing couldn't start."
+        : contract.parties.every((party) => party.signedAt)
+          ? "Both sides have signed, but the signed copy couldn't be made yet."
+          : ''
+  const signedOn = contract.parties.map((party) => party.signedAt).sort().at(-1)
   const labels = contract.parties.reduce(
     (all, party) => ({ ...all, [party.role]: `${party.orgName} signs here` }),
     { PROPOSER: '', COUNTERPARTY: '' },
@@ -272,8 +290,14 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
           <h2 className="m-0 truncate font-serif text-2xl font-medium text-ink">{contract.title}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-3 text-sm">
             <StatusBadge status={contract.status} />
-            {contract.status === 'READY_TO_SIGN' ? (
-              <span className="font-medium text-action">Both sides are ready to sign</span>
+            {contract.status === 'SIGNED' ? (
+              <span className="font-medium text-action">Signed by both sides{signedOn && ` on ${formatDate(signedOn)}`}</span>
+            ) : contract.status === 'READY_TO_SIGN' ? (
+              <span className="font-medium text-action">
+                {contract.parties
+                  .map((party) => (party.signedAt ? `${party.orgName} signed` : `Waiting for ${signerName(party)} (${party.orgName}) to sign`))
+                  .join(' · ')}
+              </span>
             ) : turnParty && (
               <span className={myTurn ? 'font-medium text-action' : 'text-ink-muted'}>
                 {myTurn ? 'Your turn' : `Waiting for ${turnParty.orgName} to respond`}
@@ -310,9 +334,15 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
             </DropdownMenu.RadioGroup>
           </Menu>
           <Menu label="Export">
+            {contract.status === 'SIGNED' && (
+              <>
+                <DropdownMenu.Item className={menuItemClass} onSelect={() => download('/signed-pdf')}>Signed PDF</DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 h-px bg-rule" />
+              </>
+            )}
             <p className="px-3 py-2 text-xs text-ink-muted">A clean copy, without red or green marks.</p>
-            <DropdownMenu.Item className={menuItemClass} onSelect={() => exportAs('docx')}>Word (.docx)</DropdownMenu.Item>
-            <DropdownMenu.Item className={menuItemClass} onSelect={() => exportAs('pdf')}>PDF</DropdownMenu.Item>
+            <DropdownMenu.Item className={menuItemClass} onSelect={() => download('/export?format=docx')}>Word (.docx)</DropdownMenu.Item>
+            <DropdownMenu.Item className={menuItemClass} onSelect={() => download('/export?format=pdf')}>PDF</DropdownMenu.Item>
           </Menu>
           {negotiating && myParty?.readyAt && (
             <>
@@ -335,7 +365,10 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
               Ready to sign
             </Button>
           )}
-          {contract.status === 'READY_TO_SIGN' && (
+          {canSign && (
+            <Button onClick={() => setSignOpen(true)}>Sign</Button>
+          )}
+          {contract.status === 'READY_TO_SIGN' && !myParty?.signedAt && (
             <Button
               variant="outline"
               onClick={() => {
@@ -360,6 +393,20 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
       </header>
       {actionError && !readyOpen && !reopenOpen && (
         <p className="border-b border-rule bg-paper px-6 py-3 text-sm text-destructive">{actionError}</p>
+      )}
+      {contract.status === 'SIGNED' && signing?.signedDocHash && (
+        <p className="flex flex-wrap items-center gap-3 border-b border-rule bg-paper px-6 py-3 text-sm text-ink">
+          <Button size="sm" onClick={() => download('/signed-pdf')}>Download signed PDF</Button>
+          <span className="break-all text-xs text-ink-muted">Fingerprint (SHA-256): {signing.signedDocHash}</span>
+        </p>
+      )}
+      {signingBlocker && (
+        <p className="flex flex-wrap items-center gap-3 border-b border-rule bg-paper px-6 py-3 text-sm text-ink">
+          {signingBlocker}
+          <Button size="sm" variant="outline" disabled={actionBusy} onClick={() => void act(() => api(`/contracts/${id}/signing/retry`, { method: 'POST' }))}>
+            Try again
+          </Button>
+        </p>
       )}
       {negotiating && !myParty?.readyAt && readyBlocker && otherParty?.readyAt && (
         <p className="border-b border-rule bg-paper px-6 py-3 text-sm text-ink-muted">Ready to sign: {readyBlocker}</p>
@@ -537,6 +584,21 @@ export function ContractPage({ id, user }: { id: string; user: User }) {
         )}
         {actionError && <p className="mt-4 text-sm text-destructive">{actionError}</p>}
       </Modal>
+
+      {myParty && (
+        <SignDialog
+          contractId={id}
+          orgName={myParty.orgName}
+          defaultName={user.name ?? ''}
+          open={signOpen}
+          onOpenChange={setSignOpen}
+          onReopenInstead={() => {
+            setSignOpen(false)
+            setActionError('')
+            setReopenOpen(true)
+          }}
+        />
+      )}
 
       <Modal title="Reopen for changes?" open={reopenOpen} onOpenChange={setReopenOpen}>
         <p className="text-sm leading-relaxed text-ink-muted">

@@ -96,12 +96,13 @@ export function PeopleDialog({ contract, user, myParty, open, onOpenChange, onCh
               heading="Your side"
               pendingLabel="Invited"
               signerPicker={
+                <>
                 <label className="mt-1 flex items-center gap-2 text-sm text-ink-muted">
                   Signs:
                   <select
                     className="rounded-sm border border-rule bg-paper px-2 py-1 text-ink"
                     value={myParty.signer?.id ?? ''}
-                    disabled={busy || contract.status === 'SIGNED'}
+                    disabled={busy || contract.status === 'SIGNED' || Boolean(myParty.signedAt)}
                     onChange={(e) => void submit(e, () => api(`/contracts/${contract.id}/signer`, { method: 'PATCH', body: { userId: e.target.value } }))}
                   >
                     {!myParty.participants.some((p) => p.user.id === myParty.signer?.id) && (
@@ -113,7 +114,15 @@ export function PeopleDialog({ contract, user, myParty, open, onOpenChange, onCh
                       <option key={p.user.id} value={p.user.id}>{p.user.name ?? p.user.email}</option>
                     ))}
                   </select>
+                  {myParty.signedAt && <span>(signed)</span>}
                 </label>
+                {otherParty?.signedAt && !myParty.signedAt && (
+                  <p className="mt-2 text-xs leading-relaxed text-ink-muted">
+                    {otherParty.orgName} has already signed. If the contract names {myParty.signer?.name ?? myParty.signer?.email ?? 'your signer'} as
+                    your signer, changing it means the names won't match, and the text can't be changed now. Reopen to fix the wording.
+                  </p>
+                )}
+                </>
               }
             />
           )}

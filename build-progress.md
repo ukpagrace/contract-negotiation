@@ -1,6 +1,6 @@
 # Contract Negotiation Platform: Build Progress
 
-30 September 2026. **Phases 1–8 complete. Phase 9 planned (9a, 9b), waiting for go-ahead.**
+1 October 2026. **Phases 1–8 and 9a complete. 9b (DocuSeal signing) remaining.**
 
 1. [Summary](#1-summary)
 2. [Decisions log](#2-decisions-log)
@@ -25,7 +25,7 @@ The platform lets two organisations draft and negotiate a contract together, tak
 | 6 | Comments, chat, live updates | Done |
 | 7 | Upload diffing, version restore | Done |
 | 8 | AI questions and explanations | Done |
-| 9 | Ready to sign, e-signature, export | Planned (9a, 9b); waiting for go-ahead |
+| 9 | Ready to sign, e-signature, export | 9a done (Ready, spots, signers, Reopen, export); 9b (DocuSeal) to do |
 
 ### Technology in use
 
@@ -92,6 +92,8 @@ Every question raised during the build and the answer given, in order.
 | 42 | Phase 9 | What do we put on the PDF? | Spot → signature box only (name, title, date lines are the contract's own wording). Added page → "For Acme Ltd" label + signature + date filled in automatically on signing, same for Beta. No person's name on the PDF. |
 | 43 | Phase 9 | Reopen? | Allowed from both-clicked-Ready until **both** have signed; after one side signs, only the side still to sign can Reopen. Document unchanged; DocuSeal request cancelled (any signature discarded); both clicks cleared; turn goes to the reopener; spots kept; Reopened email to both ("…Acme's signature was discarded" when relevant). After fixes: both click Ready again → new PDF, new DocuSeal request, both sign again. Old PDF not stored by us; activity log notes it. |
 | 44 | Phase 9 | Build in one go or split? | Split: 9a (Ready, spots, signer, Reopen, export, emails), 9b (DocuSeal signing). |
+| 45 | Phase 9a | Can Ready be clicked while the side whose turn it is has unsent edits (e.g. accepted changes not yet sent)? | No. The latest version must be sent first, so the other side agrees to text they have actually seen. Button greyed with the reason. |
+| 46 | Phase 9a | Should a spot add text to the page? | No. In the editor it is a small ✍ icon with a "Acme signs here" flag above the line; Word/PDF exports add nothing for it. |
 
 ### Technical choices made along the way
 
@@ -112,6 +114,11 @@ Every question raised during the build and the answer given, in order.
 | Shared comments on unsent text | Refused ("The other side can't see this yet"): a shared thread may only quote text or changes in the last sent version, so it can't leak the draft. Internal is always allowed. |
 | Live update messages | Carry only what to reload (contract, document, lock, comments, chat); the page refetches through the filtered API. Internal activity is only pushed to its own side. |
 | Outdated | Worked out by the page, not stored: text threads whose quote is gone, change threads whose change is no longer pending. |
+| Draft visibility with spots | If the draft differs from the last sent version only by signature spots, both sides see the draft, so the counterparty sees the spots. |
+| Placing spots | The page sends each spot's position as a character offset in the document text, plus that text. The server refuses if the words differ, but ignores line-break differences (the editor adds an empty line after a final table) by mapping offsets across them. |
+| Spots while editing | Edits that would delete or copy a spot are refused in the editor; the server refuses saves that change spots. Uploads and restores rebuild the document without them. |
+| Ready switch | Each click is saved, then one conditional update switches to Ready to sign only if both sides are ready, so two clicks at once can't both (or neither) switch. |
+| Export | The converter turns the document into Word with python-docx; PDF via LibreOffice (`soffice`, or `SOFFICE` env). Refused while changes are pending. |
 
 ---
 
@@ -236,10 +243,24 @@ Every question raised during the build and the answer given, in order.
 
 **Checked:** real Claude calls: explain (replacement explained as one), grouped summary, Ask AI incl. follow-ups (3–7 s each); the other side's internal comment never reached the AI; hourly limit (429), bad input (400), unknown change (404); browser test of both screens.
 
+### Phase 9a: Ready to sign, signature spots, signers, Reopen, export
+Decisions 31–46.
+- **Ready to sign:** header button after the first send, with nothing pending and nothing unsent (decision 45); greyed with the reason otherwise. Clicked side: "Waiting for Beta" + **Undo ready**; other side sees "Acme is ready to sign" live. Both clicked → status Ready to sign (editing, send, upload, restore blocked) + email to everyone joined on both sides. A saved text change or accept/reject clears both clicks.
+- **Proposer's Ready window:** **Place signature spots** / **Move signature spots**, **Keep spots where they are** (if placed), **Use a signature page**. Counterparty's window says where signatures will go, or that Acme will choose.
+- **Placing mode:** sticky bar "Click where Acme signs." → "Click where Beta signs." → "Both spots placed. Click a spot to move it." with Cancel / Done; Done saves the spots and marks the proposer ready.
+- **Spot marker:** ✍ icon + flag above the line, no text added (decision 46); untracked; can't be deleted or pasted while editing.
+- **Signers:** set on creation (creator; counterparty contact, who gets an account then). Existing contracts filled by the migration. People window: "Signs: …" per side, dropdown for your own side (members who have joined).
+- **Reopen for changes:** from Ready to sign; text unchanged, both clicks cleared, turn to the reopener, spots kept, email to both.
+- **Export menu:** Word (.docx) or PDF, clean copy; spots add nothing.
+- **API:** `POST/DELETE /contracts/:id/ready` (`placement` SPOTS | PAGE from the proposer), `PUT /contracts/:id/signature-spots` (`offsets`, `baseText`), `PATCH /contracts/:id/signer` (`userId`), `POST /contracts/:id/reopen`, `GET /contracts/:id/export?format=docx|pdf`. Contract detail adds `hasUnsentChanges`, `signaturePlacement`, each side's `readyAt` and `signer`. Migration `ready_to_sign`.
+- **Converter:** `POST /export?format=docx|pdf`.
+
+**Checked:** unit tests for spot placement, offset mapping and empty paragraphs (41 in total); API scenario test (19 checks: blocks before send / with pending / unsent, placement rules, click clearing, spots proposer-only and stale-text refusal, both-ready switch + emails, blocks while ready, export, reopen + emails, signer rules, spot-removing save refused); browser test (30 checks, two users) incl. placing, moving, live updates, export download, reopen, Backspace across a spot. Re-tested on a real uploaded contract ending in a table, after fixing the "document changed" error and the label text on the page.
+
 ## 4. Remaining phases
 
 ### Phase 9: Signing and export
-Decisions 31–44.
+Decisions 31–46. 9a is done (above); the flow below is the whole phase.
 
 **Flow**
 1. **Ready to sign button:** after the first send, with zero pending changes. Either side can go first; clicked side sees "Waiting for Beta" + **Undo ready**. A saved text change clears both clicks.
@@ -248,16 +269,10 @@ Decisions 31–44.
 4. **Signing:** only each side's chosen signer sees **Sign**; DocuSeal's form opens inside our page. A side can switch its signer until it has signed (warning if the other side already signed).
 5. **Reopen:** from both-clicked until both signed (after one signature, only the unsigned side). Cancels the DocuSeal request, clears clicks, turn to reopener, Reopened email. Next round: new PDF, both sign again.
 6. **Both signed** → DocuSeal notifies our API; signed PDF stored in R2, SHA-256 hash saved, status **Signed**, contract locked, Signed email to both, **Download signed PDF**.
-7. **Export:** clean copy (no red/green), **Word** or **PDF**; refused while any change is pending ("Changes are still pending"). Spots appear as blank signature lines.
-
-**9a (to do):** Ready clicks + undo, placing mode + spots, choose signer, Reopen, export, emails (Ready to sign, Reopened).
-- Database: `ContractParty.readyAt`, `readyByUserId`, `signerUserId`; `Contract.signaturePlacement` (SPOTS | PAGE).
-- Document: inline `signatureSpot` marker (`role` PROPOSER | COUNTERPARTY), shown as a chip; save check exempts spots from tracking, proposer-only.
-- Converter: document data → Word (spots → DocuSeal tags, optional signature page); Word → PDF via LibreOffice (new system dependency).
-- API: `POST/DELETE /contracts/:id/ready`, `PUT /contracts/:id/signature-spots`, `PATCH /contracts/:id/parties/:partyId/signer`, `POST /contracts/:id/reopen`, `GET /contracts/:id/export?format=pdf|docx`; existing blocks extended for Ready to sign / Signed.
-- Web: Ready button states, Ready window, placing-mode bar + chips, "Choose who signs" in People, Reopen, Export menu.
+7. **Export:** clean copy (no red/green), **Word** or **PDF**; refused while any change is pending ("Changes are still pending"). Spots add nothing.
 
 **9b (to do):** DocuSeal.
+- Signing PDF from the converter: spots → DocuSeal signature tags, or the added signature page ("For Acme Ltd" + signature + date).
 - `docker-compose.yml` adds DocuSeal; `api/.env`: `DOCUSEAL_URL`, `DOCUSEAL_API_KEY`, `DOCUSEAL_WEBHOOK_SECRET`. One-time: create local DocuSeal admin, copy API key.
 - Signing request from the PDF (emails off); signer swap updates the DocuSeal signer (no rebuild); Reopen cancels it.
 - API: `GET /contracts/:id/signing` (my signing link), `POST /signing/webhook` (shared secret), `GET /contracts/:id/signed-pdf`.
@@ -284,6 +299,11 @@ Decisions 31–44.
 - Heavy edits right around commented text can mark its thread Outdated sooner.
 - Web typecheck: only a deprecated `baseUrl` setting warning remains.
 - Editor toolbar still has buttons contracts don't need (code block, task list, highlight); trimming suggested, not done.
+- PDF export needs LibreOffice installed where the converter runs; without it the user sees "PDF export needs LibreOffice installed on the server." Word export works.
+- Saving without changing anything can still count as unsent (the editor stores the document slightly differently), so Ready stays blocked until the next send.
+- Ready to sign / Reopened emails go only to people who have joined, not to pending invites.
+- Signer dropdown lists only members who have joined; the default counterparty signer shows "(not joined yet)" until they do.
+- A text save landing at the same moment as the other side's Ready click could leave that click standing; very unlikely.
 
 **Deferred by decision (build later):**
 - Accept/Reject while editing (inside the editor, saved with your edits; needs the server save check reworked).
@@ -302,7 +322,8 @@ cd api && npx prisma migrate dev          # first time
 cd api && npm run start:dev               # API on :3000
 
 cd converter && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # first time
-cd converter && .venv/bin/python app.py   # Word converter on :8001
+cd converter && .venv/bin/python app.py   # Word converter + export on :8001
+brew install --cask libreoffice           # optional: PDF export
 
 cd web && npm run dev                     # web on :5173, /api forwarded to the API
 ```

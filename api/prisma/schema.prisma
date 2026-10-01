@@ -69,6 +69,7 @@ model User {
   invitesSent       Invite[]
   partiesReadied    ContractParty[] @relation("PartyReadyBy")
   partiesSigning    ContractParty[] @relation("PartySigner")
+  signatures        Signature[]
 }
 
 model Session {
@@ -126,6 +127,7 @@ model ContractParty {
   readyAt       DateTime?
   readyByUserId String?
   signerUserId  String?
+  signedAt      DateTime?
 
   contract       Contract          @relation("ContractParties", fields: [contractId], references: [id], onDelete: Cascade)
   readyBy        User?             @relation("PartyReadyBy", fields: [readyByUserId], references: [id])
@@ -137,6 +139,7 @@ model ContractParty {
   changes        Change[]
   threads        CommentThread[]
   chatMessages   ChatMessage[]
+  signatures     Signature[]
 
   @@unique([contractId, role])
 }
@@ -273,18 +276,44 @@ model UploadedFile {
   uploadedBy User     @relation(fields: [uploadedById], references: [id])
 }
 
+// One signing round per Ready to sign; status PENDING, COMPLETED or CANCELLED (on Reopen).
+// unsigned*: the document both sides sign; signed*: the final copy with signatures and audit page.
 model SigningRequest {
-  id            String   @id @default(cuid())
-  contractId    String
-  versionId     String
-  provider      String
-  externalId    String?
-  status        String
-  signedDocHash String?
-  createdAt     DateTime @default(now())
+  id              String   @id @default(cuid())
+  contractId      String
+  versionId       String
+  provider        String
+  externalId      String?
+  status          String
+  unsignedFileKey String?
+  unsignedHash    String?
+  signedFileKey   String?
+  signedDocHash   String?
+  createdAt       DateTime @default(now())
 
-  contract Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  version  ContractVersion @relation(fields: [versionId], references: [id])
+  contract   Contract        @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  version    ContractVersion @relation(fields: [versionId], references: [id])
+  signatures Signature[]
+}
+
+// One per side per round. method: DRAWN, TYPED or UPLOADED. documentHash: the unsigned document's.
+model Signature {
+  id           String   @id @default(cuid())
+  requestId    String
+  partyId      String
+  userId       String
+  method       String
+  imageKey     String
+  ip           String?
+  userAgent    String?
+  documentHash String
+  signedAt     DateTime @default(now())
+
+  request SigningRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  party   ContractParty  @relation(fields: [partyId], references: [id])
+  user    User           @relation(fields: [userId], references: [id])
+
+  @@unique([requestId, partyId])
 }
 
 model ActivityLog {

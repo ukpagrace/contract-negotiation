@@ -5,8 +5,12 @@ Word tracked changes are accepted (insertions kept, deletions dropped) and
 Word comments are dropped, per spec section 4.2.
 
 /export turns a clean (no pending changes) TipTap document into .docx, or into
-PDF through LibreOffice.
+PDF through LibreOffice. With `signing`, it is the document to sign: signatures
+go at each signature spot or on a signature page added at the end (blank until
+signed), and a signed copy ends with the audit page.
 """
+
+import base64
 
 import io
 import json
@@ -18,8 +22,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
+from docx.shared import Cm
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 from docx.text.run import Run
@@ -228,11 +233,29 @@ EXPORT_ALIGN = {
 TEXTBLOCKS = ("paragraph", "heading", "codeBlock")
 
 
-# Signature spots only mark a position for e-signing, so they add nothing to an export.
-def add_inline(paragraph, nodes: list[dict]):
+ROLES = ("PROPOSER", "COUNTERPARTY")
+SIGNATURE_HEIGHT = Cm(1.5)
+SIGNATURE_MAX_WIDTH = Cm(6)
+
+
+def add_signature(paragraph, image: bytes):
+    picture = paragraph.add_run().add_picture(io.BytesIO(image), height=SIGNATURE_HEIGHT)
+    # A long, flat signature is limited by width instead, keeping its proportions.
+    if picture.width > SIGNATURE_MAX_WIDTH:
+        picture.height = int(picture.height * SIGNATURE_MAX_WIDTH / picture.width)
+        picture.width = SIGNATURE_MAX_WIDTH
+
+
+# A signature spot shows the side's signature once signed, and nothing otherwise.
+# signatures: {role: PNG bytes} for the sides that have signed.
+def add_inline(paragraph, nodes: list[dict], signatures: dict):
     for node in nodes:
         if node["type"] == "hardBreak":
             paragraph.add_run().add_break()
+        elif node["type"] == "signatureSpot":
+            image = signatures.get(node["attrs"]["role"])
+            if image:
+                add_signature(paragraph, image)
         elif node["type"] == "text":
             run = paragraph.add_run(node.get("text", ""))
             marks = {mark["type"] for mark in node.get("marks", [])}
@@ -244,21 +267,21 @@ def add_inline(paragraph, nodes: list[dict]):
             run.font.subscript = "subscript" in marks or None
 
 
-def add_textblock(container, node: dict, style: str | None = None):
+def add_textblock(container, node: dict, signatures: dict, style: str | None = None):
     if node["type"] == "heading":
         style = style or f"Heading {min(node.get('attrs', {}).get('level', 1), 9)}"
     paragraph = container.add_paragraph(style=style)
     align = EXPORT_ALIGN.get((node.get("attrs") or {}).get("textAlign"))
     if align is not None:
         paragraph.alignment = align
-    add_inline(paragraph, node.get("content", []))
+    add_inline(paragraph, node.get("content", []), signatures)
 
 
-def add_blocks(container, nodes: list[dict], depth: int = 0):
+def add_blocks(container, nodes: list[dict], signatures: dict, depth: int = 0):
     for node in nodes:
         kind = node["type"]
         if kind in TEXTBLOCKS:
-            add_textblock(container, node)
+            add_textblock(container, node, signatures)
         elif kind in ("bulletList", "orderedList", "taskList"):
             # Word's built-in list styles go three levels deep.
             base = "List Number" if kind == "orderedList" else "List Bullet"
@@ -266,19 +289,19 @@ def add_blocks(container, nodes: list[dict], depth: int = 0):
             for item in node.get("content", []):
                 first, *rest = item.get("content", []) or [{"type": "paragraph"}]
                 if first["type"] in TEXTBLOCKS:
-                    add_textblock(container, first, style)
+                    add_textblock(container, first, signatures, style)
                 else:
                     rest = [first, *rest]
-                add_blocks(container, rest, depth + 1)
+                add_blocks(container, rest, signatures, depth + 1)
         elif kind == "table":
-            add_table(container, node)
+            add_table(container, node, signatures)
         elif kind == "blockquote":
-            add_blocks(container, node.get("content", []), depth)
+            add_blocks(container, node.get("content", []), signatures, depth)
         elif kind == "horizontalRule":
             container.add_paragraph()
 
 
-def add_table(container, node: dict):
+def add_table(container, node: dict, signatures: dict):
     rows = node.get("content", [])
     width = max((sum((cell.get("attrs") or {}).get("colspan", 1) for cell in row.get("content", [])) for row in rows), default=0)
     if not rows or width == 0:
@@ -293,7 +316,7 @@ def add_table(container, node: dict):
             if span > 1:
                 cell = cell.merge(table.cell(r, c + span - 1))
             placeholder = cell.paragraphs[0]._p
-            add_blocks(cell, cell_node.get("content", []))
+            add_blocks(cell, cell_node.get("content", []), signatures)
             # A cell must keep one paragraph; drop the empty starter one if content was added.
             if len(cell.paragraphs) > 1:
                 cell._tc.remove(placeholder)
@@ -308,10 +331,50 @@ def soffice_path() -> str | None:
     return shutil.which("soffice") or (mac if os.path.exists(mac) else None)
 
 
-def export(content: dict, title: str, fmt: str) -> bytes:
+BLANK_LINE = "_" * 30
+
+
+def add_signature_page(document, orgs: dict, signatures: dict, dates: dict):
+    document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+    document.add_heading("Signatures", level=1)
+    for role in ROLES:
+        document.add_paragraph().add_run(f"For {orgs[role]}").bold = True
+        line = document.add_paragraph()
+        if role in signatures:
+            add_signature(line, signatures[role])
+        else:
+            line.add_run(BLANK_LINE)
+        document.add_paragraph(f"Date: {dates.get(role, BLANK_LINE)}")
+        document.add_paragraph()
+
+
+# audit: {"headers": [...], "rows": [[...], ...], "notes": [...]}
+def add_audit_page(document, audit: dict):
+    document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+    document.add_heading("Signing record", level=1)
+    table = document.add_table(rows=1 + len(audit["rows"]), cols=len(audit["headers"]))
+    table.style = "Table Grid"
+    for c, header in enumerate(audit["headers"]):
+        table.cell(0, c).paragraphs[0].add_run(header).bold = True
+    for r, row in enumerate(audit["rows"], start=1):
+        for c, value in enumerate(row):
+            table.cell(r, c).paragraphs[0].add_run(value)
+    for note in audit["notes"]:
+        document.add_paragraph(note)
+
+
+# signing: {"placement": "SPOTS" | "PAGE", "orgs": {role: name},
+#           "signatures": {role: {"image": base64 PNG, "date": text}}, "audit": {...} once signed}
+def export(content: dict, title: str, fmt: str, signing: dict | None = None) -> bytes:
     document = Document()
     document.core_properties.title = title
-    add_blocks(document, content.get("content", []))
+    signed = (signing or {}).get("signatures") or {}
+    images = {role: base64.b64decode(sig["image"]) for role, sig in signed.items()}
+    add_blocks(document, content.get("content", []), images)
+    if signing is not None and signing["placement"] == "PAGE":
+        add_signature_page(document, signing["orgs"], images, {role: sig["date"] for role, sig in signed.items()})
+    if signing is not None and signing.get("audit"):
+        add_audit_page(document, signing["audit"])
     buffer = io.BytesIO()
     document.save(buffer)
     if fmt == "docx":
@@ -354,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(400, {"message": "Format must be docx or pdf."})
         body = json.loads(data)
         try:
-            result = export(body["content"], body.get("title", ""), fmt)
+            result = export(body["content"], body.get("title", ""), fmt, body.get("signing"))
         except FileNotFoundError:
             return self.respond(503, {"message": "PDF export needs LibreOffice installed on the server."})
         except subprocess.SubprocessError:

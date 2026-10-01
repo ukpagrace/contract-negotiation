@@ -13,7 +13,7 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createClient } from 'redis';
 
@@ -56,6 +56,8 @@ const LOCK_TTL_MS = 60_000;
 const NEGOTIATING: ContractStatus[] = [ContractStatus.WITH_PROPOSER, ContractStatus.WITH_COUNTERPARTY];
 
 export type ExportFormat = 'docx' | 'pdf';
+
+export const fileName = (title: string, extension: string) => `${title.replace(/[^\w .-]+/g, '').trim() || 'contract'}.${extension}`;
 
 export interface LockHolder {
   userId: string;
@@ -429,8 +431,9 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Ready to sign: each side confirms the text as last sent, with nothing pending. The proposer
-  // also says where signatures go. Once both have, the contract is Ready to sign.
-  async markReady(user: User, contractId: string, placement: SignaturePlacement | undefined): Promise<void> {
+  // also says where signatures go. Once both have, the contract is Ready to sign; returns whether
+  // this click made that switch (the caller then starts signing, which tells the pages).
+  async markReady(user: User, contractId: string, placement: SignaturePlacement | undefined): Promise<boolean> {
     const party = await this.contracts.partyOf(user, contractId);
     const contract = await this.contracts.get(user, contractId);
     this.assertAgreed(contract, party);
@@ -456,12 +459,15 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       where: { id: contractId, status: { in: NEGOTIATING }, parties: { every: { readyAt: { not: null } } } },
       data: { status: ContractStatus.READY_TO_SIGN },
     });
-    this.events.publish(contractId, 'contract');
-    if (switched.count === 0) return;
+    if (switched.count === 0) {
+      this.events.publish(contractId, 'contract');
+      return false;
+    }
 
     await this.prisma.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'READY_TO_SIGN', payload: {} } });
     const link = `${this.config.get('appUrl', { infer: true })}/contracts/${contractId}`;
     await this.emailBothSides(contractId, (email) => readyToSignEmail(email, contract.title, link));
+    return true;
   }
 
   async undoReady(user: User, contractId: string): Promise<void> {
@@ -509,7 +515,8 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
   }
 
   // Back to negotiating from Ready to sign. The text doesn't change; the reopening side gets the turn.
-  async reopen(user: User, contractId: string): Promise<void> {
+  // `discardedOrg`: a side whose signature was thrown away by this, for the email.
+  async reopen(user: User, contractId: string, discardedOrg?: string): Promise<void> {
     const party = await this.contracts.partyOf(user, contractId);
     const contract = await this.prisma.contract.findUniqueOrThrow({ where: { id: contractId } });
     const reopened = await this.prisma.$transaction(async (tx) => {
@@ -521,8 +528,8 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
         },
       });
       if (updated.count === 0) return false;
-      await tx.contractParty.updateMany({ where: { contractId }, data: { readyAt: null, readyByUserId: null } });
-      await tx.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'REOPENED', payload: {} } });
+      await tx.contractParty.updateMany({ where: { contractId }, data: { readyAt: null, readyByUserId: null, signedAt: null } });
+      await tx.activityLog.create({ data: { contractId, actorUserId: user.id, type: 'REOPENED', payload: { discardedOrg } } });
       return true;
     });
     if (!reopened) {
@@ -530,7 +537,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     }
     this.events.publish(contractId, 'document');
     const link = `${this.config.get('appUrl', { infer: true })}/contracts/${contractId}`;
-    await this.emailBothSides(contractId, (email) => reopenedEmail(email, party.orgName, contract.title, link));
+    await this.emailBothSides(contractId, (email) => reopenedEmail(email, party.orgName, contract.title, link, discardedOrg));
   }
 
   // A clean copy of the document the user can see, with nothing pending.
@@ -542,19 +549,42 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     if (collectChanges(contract.draftContent as unknown as DocNode).size > 0) {
       throw new ConflictException('Changes are still pending. Accept or reject them before exporting.');
     }
+    const { file, type } = await this.render(contract.draftContent, contract.title, format);
+    return { file, filename: fileName(contract.title, format), type };
+  }
+
+  // The converter's Word or PDF of a document; with `signing`, laid out for signing (see SigningService).
+  async render(
+    content: Prisma.JsonValue,
+    title: string,
+    format: ExportFormat,
+    signing?: {
+      placement: SignaturePlacement;
+      orgs: Record<SpotRole, string>;
+      signatures?: Record<SpotRole, { image: string; date: string }>;
+      audit?: { headers: string[]; rows: string[][]; notes: string[] };
+    },
+  ): Promise<{ file: Buffer; type: string }> {
     const response = await fetch(`${this.config.get('extractorUrl', { infer: true })}/export?format=${format}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content: contract.draftContent, title: contract.title }),
+      body: JSON.stringify({ content, title, signing }),
       signal: AbortSignal.timeout(this.config.get('extractorTimeoutMs', { infer: true })),
     });
     if (!response.ok) {
       const { message } = (await response.json().catch(() => ({}))) as { message?: string };
       throw new ServiceUnavailableException(message ?? "The file couldn't be made. Try again in a moment.");
     }
-    const type = response.headers.get('content-type') ?? 'application/octet-stream';
-    const filename = `${contract.title.replace(/[^\w .-]+/g, '').trim() || 'contract'}.${format}`;
-    return { file: Buffer.from(await response.arrayBuffer()), filename, type };
+    return { file: Buffer.from(await response.arrayBuffer()), type: response.headers.get('content-type') ?? 'application/octet-stream' };
+  }
+
+  async storeFile(key: string, body: Buffer, contentType: string): Promise<void> {
+    await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }));
+  }
+
+  async readFile(key: string): Promise<Buffer> {
+    const object = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    return Buffer.from(await object.Body!.transformToByteArray());
   }
 
   private assertAgreed(contract: ContractDetail, party: ContractParty): void {
@@ -575,7 +605,7 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async emailBothSides(contractId: string, build: (email: string) => OutboundEmail): Promise<void> {
+  async emailBothSides(contractId: string, build: (email: string) => OutboundEmail): Promise<void> {
     const participants = await this.prisma.participant.findMany({ where: { party: { contractId } }, include: { user: true } });
     for (const { user } of participants) {
       // The change is already committed; a failed email shouldn't report it as failed.

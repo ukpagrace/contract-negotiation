@@ -24,6 +24,7 @@ import { SessionGuard, type AuthenticatedRequest } from '../auth/session.guard.j
 import { SignaturePlacement, type PartyRole, type Prisma } from '../generated/prisma/client.js';
 import { ContractsService, type ContractDetail, type TeamMember } from './contracts.service.js';
 import { EditorService, type ChangeItem, type LockHolder } from './editor.service.js';
+import { SigningService } from './signing.service.js';
 
 const docxUpload = FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024 } });
 
@@ -58,6 +59,7 @@ export class ContractsController {
   constructor(
     private readonly contracts: ContractsService,
     private readonly editor: EditorService,
+    private readonly signing: SigningService,
   ) {}
 
   // Accepts JSON, or multipart with an optional .docx `file` (then `team` is a JSON string and title is optional).
@@ -246,11 +248,11 @@ export class ContractsController {
   @Post('contracts/:id/ready')
   @HttpCode(204)
   @UseGuards(SessionGuard)
-  markReady(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body('placement') placement: unknown): Promise<void> {
+  async markReady(@Req() request: AuthenticatedRequest, @Param('id') id: string, @Body('placement') placement: unknown): Promise<void> {
     if (placement !== undefined && placement !== SignaturePlacement.SPOTS && placement !== SignaturePlacement.PAGE) {
       throw new BadRequestException('placement must be SPOTS or PAGE.');
     }
-    return this.editor.markReady(request.user, id, placement);
+    if (await this.editor.markReady(request.user, id, placement)) await this.signing.start(id);
   }
 
   @Delete('contracts/:id/ready')
@@ -285,14 +287,14 @@ export class ContractsController {
     if (typeof userId !== 'string') {
       throw new BadRequestException('Choose who signs.');
     }
-    return this.contracts.setSigner(request.user, id, userId);
+    return this.signing.setSigner(request.user, id, userId);
   }
 
   @Post('contracts/:id/reopen')
   @HttpCode(204)
   @UseGuards(SessionGuard)
   reopen(@Req() request: AuthenticatedRequest, @Param('id') id: string): Promise<void> {
-    return this.editor.reopen(request.user, id);
+    return this.signing.reopen(request.user, id);
   }
 
   @Get('contracts/:id/export')

@@ -9,10 +9,12 @@ import { DiscussionController } from './discussion.controller.js';
 import { DiscussionService } from './discussion.service.js';
 import { EditorService } from './editor.service.js';
 import { EventsService } from './events.service.js';
+import { SigningController } from './signing.controller.js';
+import { SigningService } from './signing.service.js';
 
 @Module({
   imports: [AuthModule],
-  controllers: [ContractsController, DiscussionController, AiController],
-  providers: [ContractsService, EditorService, DiscussionService, EventsService, AiService],
+  controllers: [ContractsController, DiscussionController, AiController, SigningController],
+  providers: [ContractsService, EditorService, DiscussionService, EventsService, AiService, SigningService],
 })
 export class ContractsModule {}
