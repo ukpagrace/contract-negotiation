@@ -4,8 +4,9 @@ import { api, navigate, type ContractDetail } from '@/lib/api'
 import { inputClass } from './Login'
 
 export function NewContract() {
-  const [mode, setMode] = useState<'new' | 'upload'>('new')
+  const [mode, setMode] = useState<'new' | 'upload' | 'google'>('new')
   const [file, setFile] = useState<File | null>(null)
+  const [googleDocUrl, setGoogleDocUrl] = useState('')
   const [title, setTitle] = useState('')
   const [proposerOrgName, setProposerOrgName] = useState('')
   const [counterpartyOrgName, setCounterpartyOrgName] = useState('')
@@ -19,7 +20,7 @@ export function NewContract() {
     setBusy(true)
     setError('')
     try {
-      let body: object = { title, proposerOrgName, counterpartyOrgName, counterpartyEmail, team }
+      let body: object = { title, proposerOrgName, counterpartyOrgName, counterpartyEmail, team, ...(mode === 'google' && { googleDocUrl }) }
       if (mode === 'upload' && file) {
         const form = new FormData()
         Object.entries({ title, proposerOrgName, counterpartyOrgName, counterpartyEmail }).forEach(([k, v]) => form.append(k, v))
@@ -43,10 +44,10 @@ export function NewContract() {
     <div className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
       <form onSubmit={submit} className="sheet px-6 py-10 sm:px-12">
         <div className="mb-8 flex gap-6 text-sm" role="radiogroup" aria-label="How to start">
-          {(['new', 'upload'] as const).map((option) => (
+          {(['new', 'upload', 'google'] as const).map((option) => (
             <label key={option} className="flex cursor-pointer items-center gap-2 text-ink">
               <input type="radio" name="mode" checked={mode === option} onChange={() => setMode(option)} className="accent-action" />
-              {option === 'new' ? 'Start from a blank page' : 'Upload a Word document'}
+              {option === 'new' ? 'Start from a blank page' : option === 'upload' ? 'Upload a Word document' : 'Import a Google Doc'}
             </label>
           ))}
         </div>
@@ -64,8 +65,15 @@ export function NewContract() {
           </label>
         )}
 
+        {mode === 'google' && (
+          <label className="mb-8 block">
+            <span className="text-sm text-ink-muted">Google Docs link (set to "Anyone with the link can view")</span>
+            <input className={inputClass} type="url" required placeholder="https://docs.google.com/document/d/…" value={googleDocUrl} onChange={(e) => setGoogleDocUrl(e.target.value)} />
+          </label>
+        )}
+
         <label className="block">
-          <span className="text-sm text-ink-muted">Contract name{mode === 'upload' && ' (optional, taken from the document if left blank)'}</span>
+          <span className="text-sm text-ink-muted">Contract name{mode !== 'new' && ' (optional, taken from the document if left blank)'}</span>
           <input
             className={`${inputClass} font-serif text-3xl`}
             required={mode === 'new'}

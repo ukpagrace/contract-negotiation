@@ -1,4 +1,5 @@
 import {
+  BadGatewayException,
   BadRequestException,
   Body,
   Controller,
@@ -54,6 +55,26 @@ function parseDocx(file: Express.Multer.File | undefined): Buffer {
   return file.buffer;
 }
 
+// Only the doc id is taken from the user's link; the download URL is built here so the server can't be pointed elsewhere.
+async function fetchGoogleDoc(link: unknown): Promise<{ buffer: Buffer; name: string }> {
+  const id = typeof link === 'string' ? /^https:\/\/docs\.google\.com\/document\/(?:u\/\d+\/)?d\/([\w-]+)/.exec(link.trim())?.[1] : undefined;
+  if (!id) throw new BadRequestException('Paste a Google Docs link (https://docs.google.com/document/d/…).');
+  let response: Response;
+  try {
+    response = await fetch(`https://docs.google.com/document/d/${id}/export?format=docx`, { signal: AbortSignal.timeout(30_000) });
+  } catch {
+    throw new BadGatewayException("Couldn't reach Google Docs. Try again in a moment.");
+  }
+  // Private docs redirect to Google's sign-in page instead of returning the file.
+  if (!response.ok || !response.headers.get('content-type')?.includes('wordprocessingml')) {
+    throw new BadRequestException('Make the doc viewable by anyone with the link, then try again.');
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > 25 * 1024 * 1024) throw new BadRequestException('That doc is over 25 MB.');
+  const name = /filename\*=UTF-8''([^;]+)/.exec(response.headers.get('content-disposition') ?? '')?.[1];
+  return { buffer, name: name ? decodeURIComponent(name) : 'Google Doc' };
+}
+
 @Controller()
 export class ContractsController {
   constructor(
@@ -73,6 +94,7 @@ export class ContractsController {
     @Body('counterpartyOrgName') counterpartyOrgName: unknown,
     @Body('counterpartyEmail') counterpartyEmail: unknown,
     @Body('team') rawTeam: unknown,
+    @Body('googleDocUrl') googleDocUrl: unknown,
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<ContractDetail & { commentsDropped: boolean }> {
     let team = rawTeam;
@@ -93,12 +115,14 @@ export class ContractsController {
       team: ((team as unknown[] | undefined) ?? []).map(parseMember),
     };
 
-    if (!file) {
+    if (!file && !googleDocUrl) {
       const contract = await this.contracts.create(request.user, { ...input, title: parseText(title, 'Title') });
       return { ...contract, commentsDropped: false };
     }
-    const imported = await this.editor.importDocx(parseDocx(file));
-    const inferredTitle = (imported.title || file.originalname.replace(/\.docx$/i, '')).slice(0, 200);
+    const source = file ? { buffer: parseDocx(file), name: file.originalname } : await fetchGoogleDoc(googleDocUrl);
+    const imported = await this.editor.importDocx(source.buffer);
+    // Google's export has no title metadata, so python-docx would report "Word Document"; the doc's own name is better.
+    const inferredTitle = ((file && imported.title) || source.name.replace(/\.docx$/i, '')).slice(0, 200);
     const contract = await this.contracts.create(request.user, {
       ...input,
       title: title ? parseText(title, 'Title') : inferredTitle,
@@ -181,12 +205,14 @@ export class ContractsController {
   @Post('contracts/:id/upload')
   @UseGuards(SessionGuard)
   @UseInterceptors(docxUpload)
-  upload(
+  async upload(
     @Req() request: AuthenticatedRequest,
     @Param('id') id: string,
+    @Body('googleDocUrl') googleDocUrl: unknown,
     @UploadedFile() file: Express.Multer.File | undefined,
   ): Promise<{ content: Prisma.InputJsonObject; commentsDropped: boolean }> {
-    return this.editor.replaceWithUpload(request.user, id, parseDocx(file));
+    const buffer = !file && googleDocUrl ? (await fetchGoogleDoc(googleDocUrl)).buffer : parseDocx(file);
+    return this.editor.replaceWithUpload(request.user, id, buffer);
   }
 
   @Post('contracts/:id/send')

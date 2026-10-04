@@ -58,6 +58,7 @@ export function DocumentSection(props: DocumentSectionProps) {
   const [lock, setLock] = useState<LockHolder | null>(null)
   const [notice, setNotice] = useState<string>((history.state as { notice?: string } | null)?.notice ?? '')
   const [error, setError] = useState('')
+  const [googleDocUrl, setGoogleDocUrl] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const latest = useRef<JSONContent>(saved)
   const lastActivity = useRef(Date.now())
@@ -193,11 +194,14 @@ export function DocumentSection(props: DocumentSectionProps) {
     setEditing(false)
   }
 
-  function upload(file: File) {
+  function upload(file: File | string) {
     void run(async () => {
       const form = new FormData()
-      form.append('file', file)
-      const result = await api<{ content: JSONContent; commentsDropped: boolean }>(`/contracts/${id}/upload`, { body: form })
+      if (typeof file !== 'string') form.append('file', file)
+      const result = await api<{ content: JSONContent; commentsDropped: boolean }>(`/contracts/${id}/upload`, {
+        body: typeof file === 'string' ? { googleDocUrl: file } : form,
+      })
+      setGoogleDocUrl(null)
       latest.current = result.content
       setSaved(result.content)
       setVersion((v) => v + 1)
@@ -242,6 +246,7 @@ export function DocumentSection(props: DocumentSectionProps) {
             <>
               <input ref={fileInput} type="file" accept=".docx" className="hidden" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
               <Button variant="ghost" disabled={busy} onClick={() => fileInput.current?.click()}>Upload .docx</Button>
+              <Button variant="ghost" disabled={busy} onClick={() => setGoogleDocUrl(googleDocUrl === null ? '' : null)}>Google Doc</Button>
               <Button variant="outline" disabled={busy} onClick={cancel}>Cancel</Button>
               <Button disabled={busy} onClick={save}>Save</Button>
             </>
@@ -252,6 +257,21 @@ export function DocumentSection(props: DocumentSectionProps) {
           ) : null}
         </div>
       </div>
+      {editing && googleDocUrl !== null && (
+        <form
+          className="flex items-end gap-2 border-b border-rule px-6 py-3 sm:px-12"
+          onSubmit={(e) => {
+            e.preventDefault()
+            upload(googleDocUrl)
+          }}
+        >
+          <label className="flex-1">
+            <span className="text-sm text-ink-muted">Google Docs link (set to "Anyone with the link can view")</span>
+            <input className="field" type="url" required autoFocus placeholder="https://docs.google.com/document/d/…" value={googleDocUrl} onChange={(e) => setGoogleDocUrl(e.target.value)} />
+          </label>
+          <Button type="submit" disabled={busy}>Import</Button>
+        </form>
+      )}
       {notice && <p className="border-b border-rule bg-muted px-6 py-3 text-sm text-ink sm:px-12">{notice}</p>}
       {error && <p className="border-b border-rule px-6 py-3 text-sm text-destructive sm:px-12">{error}</p>}
       <div className={`px-6 sm:px-12 ${view === 'theirs' ? 'redline-theirs' : ''}`}>
