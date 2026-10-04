@@ -549,12 +549,13 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
     if (collectChanges(contract.draftContent as unknown as DocNode).size > 0) {
       throw new ConflictException('Changes are still pending. Accept or reject them before exporting.');
     }
-    const { file, type } = await this.render(contract.draftContent, contract.title, format);
+    const { file, type } = await this.render(contractId, contract.draftContent, contract.title, format);
     return { file, filename: fileName(contract.title, format), type };
   }
 
   // The converter's Word or PDF of a document; with `signing`, laid out for signing (see SigningService).
   async render(
+    contractId: string,
     content: Prisma.JsonValue,
     title: string,
     format: ExportFormat,
@@ -565,10 +566,13 @@ export class EditorService implements OnModuleInit, OnModuleDestroy {
       audit?: { headers: string[]; rows: string[][]; notes: string[] };
     },
   ): Promise<{ file: Buffer; type: string }> {
+    // The newest upload lends the export its page size, margins, headers, footers and styles.
+    const upload = await this.prisma.uploadedFile.findFirst({ where: { contractId }, orderBy: { createdAt: 'desc' } });
+    const template = upload ? (await this.readFile(upload.s3Key)).toString('base64') : undefined;
     const response = await fetch(`${this.config.get('extractorUrl', { infer: true })}/export?format=${format}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content, title, signing }),
+      body: JSON.stringify({ content, title, signing, template }),
       signal: AbortSignal.timeout(this.config.get('extractorTimeoutMs', { infer: true })),
     });
     if (!response.ok) {

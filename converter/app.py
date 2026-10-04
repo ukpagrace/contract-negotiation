@@ -11,7 +11,7 @@ signed), and a signed copy ends with the audit page.
 """
 
 import base64
-
+import copy
 import io
 import json
 import os
@@ -363,10 +363,62 @@ def add_audit_page(document, audit: dict):
         document.add_paragraph(note)
 
 
+def copy_numbering(source, target, num_id: str) -> str:
+    num = source.find(f"{qn('w:num')}[@{qn('w:numId')}='{num_id}']")
+    abstract_id = num.find(qn("w:abstractNumId")).get(qn("w:val"))
+    abstract = copy.deepcopy(source.find(f"{qn('w:abstractNum')}[@{qn('w:abstractNumId')}='{abstract_id}']"))
+    new_abstract_id = str(max((int(a.get(qn("w:abstractNumId"))) for a in target.findall(qn("w:abstractNum"))), default=-1) + 1)
+    new_num_id = str(max((int(n.get(qn("w:numId"))) for n in target.findall(qn("w:num"))), default=0) + 1)
+    abstract.set(qn("w:abstractNumId"), new_abstract_id)
+    # Word requires every abstractNum before the first num.
+    first_num = target.find(qn("w:num"))
+    if first_num is not None:
+        first_num.addprevious(abstract)
+    else:
+        target.append(abstract)
+    num = copy.deepcopy(num)
+    num.set(qn("w:numId"), new_num_id)
+    num.find(qn("w:abstractNumId")).set(qn("w:val"), new_abstract_id)
+    target.append(num)
+    return new_num_id
+
+
+# The uploaded file with its body emptied: page size, margins, headers, footers and styles stay.
+def template_document(template: bytes):
+    document = Document(io.BytesIO(template))
+    body = document.element.body
+    for child in list(body):
+        if child.tag != qn("w:sectPr"):
+            body.remove(child)
+    tracking = document.settings.element.find(qn("w:trackRevisions"))
+    if tracking is not None:
+        document.settings.element.remove(tracking)
+
+    # Export names Word's built-in styles (headings, lists, Table Grid), which files such as
+    # Google Docs exports may lack; copy the missing ones, with their list numbering, from the default.
+    default = Document()
+    have = {style.name for style in document.styles}
+    numbering = document.part.numbering_part.element
+    for style in default.styles:
+        if style.name in have:
+            continue
+        element = copy.deepcopy(style.element)
+        num_id = element.find(f"{qn('w:pPr')}/{qn('w:numPr')}/{qn('w:numId')}")
+        if num_id is not None:
+            num_id.set(qn("w:val"), copy_numbering(default.part.numbering_part.element, numbering, num_id.get(qn("w:val"))))
+        document.styles.element.append(element)
+    return document
+
+
 # signing: {"placement": "SPOTS" | "PAGE", "orgs": {role: name},
 #           "signatures": {role: {"image": base64 PNG, "date": text}}, "audit": {...} once signed}
-def export(content: dict, title: str, fmt: str, signing: dict | None = None) -> bytes:
-    document = Document()
+# template: the contract's newest uploaded .docx, whose look the export keeps.
+def export(content: dict, title: str, fmt: str, signing: dict | None = None, template: bytes | None = None) -> bytes:
+    try:
+        document = template_document(template) if template is not None else Document()
+    except Exception:
+        # An unreadable original still exports, just without its look.
+        document = Document()
     document.core_properties.title = title
     signed = (signing or {}).get("signatures") or {}
     images = {role: base64.b64decode(sig["image"]) for role, sig in signed.items()}
@@ -401,7 +453,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path not in ("/convert", "/export"):
             return self.respond(404, {"message": "Not found"})
         length = int(self.headers.get("Content-Length") or 0)
-        if length == 0 or length > MAX_BYTES:
+        # An export carries the original upload base64-encoded, plus the document and signatures.
+        if length == 0 or length > (MAX_BYTES * 2 if url.path == "/export" else MAX_BYTES):
             return self.respond(413, {"message": "File must be between 1 byte and 25 MB."})
         data = self.rfile.read(length)
         if url.path == "/export":
@@ -417,7 +470,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(400, {"message": "Format must be docx or pdf."})
         body = json.loads(data)
         try:
-            result = export(body["content"], body.get("title", ""), fmt, body.get("signing"))
+            template = base64.b64decode(body["template"]) if body.get("template") else None
+            result = export(body["content"], body.get("title", ""), fmt, body.get("signing"), template)
         except FileNotFoundError:
             return self.respond(503, {"message": "PDF export needs LibreOffice installed on the server."})
         except subprocess.SubprocessError:

@@ -73,7 +73,7 @@ export class SigningService {
       throw new ConflictException(`${missing.orgName} needs to choose who signs (People).`);
     }
     const version = await this.prisma.contractVersion.findFirstOrThrow({ where: { contractId }, orderBy: { versionNumber: 'desc' } });
-    const { file } = await this.editor.render(contract.draftContent, contract.title, 'pdf', this.signingLayout(contract));
+    const { file } = await this.editor.render(contractId, contract.draftContent, contract.title, 'pdf', this.signingLayout(contract));
     const round = await this.prisma.signingRequest.create({
       data: { contractId, versionId: version.id, provider: 'internal', status: 'PENDING', unsignedHash: sha256(file) },
     });
@@ -206,7 +206,7 @@ export class SigningService {
     if (signatures.length < contract.parties.length) return;
 
     const images = await Promise.all(signatures.map((s) => this.editor.readFile(s.imageKey)));
-    const { file } = await this.editor.render(contract.draftContent, contract.title, 'pdf', {
+    const { file } = await this.editor.render(round.contractId, contract.draftContent, contract.title, 'pdf', {
       ...this.signingLayout(contract),
       signatures: Object.fromEntries(
         signatures.map((s, i) => [s.party.role, { image: images[i].toString('base64'), date: day(s.signedAt) }]),
